@@ -5,22 +5,29 @@
   const $ = (selector) => document.querySelector(selector);
   const ui = {
     workspaceLabel: $("#workspace-label"),
-    refresh: $("#refresh-button"),
+    workspaceSelect: $("#workspace-select"),
+    workspaceScopeNote: $("#workspace-scope-note"),
+    summaryWorkspaceName: $("#summary-workspace-name"),
     tabCount: $("#workspace-tab-count"),
     eligibleCount: $("#eligible-count"),
     skippedCount: $("#skipped-count"),
-    reviewAll: $("#review-all-button"),
+    unloadAll: $("#unload-all-button"),
     confirmation: $("#bulk-confirmation"),
     confirmationText: $("#bulk-confirmation-text"),
     cancelBulk: $("#cancel-bulk-button"),
     confirmBulk: $("#confirm-bulk-button"),
+    tabSectionTitle: $("#tabs-title"),
+    tabSectionNote: $("#tab-section-note"),
+    tabSortSelect: $("#tab-sort-select"),
     tabList: $("#tab-list"),
     status: $("#status")
   };
 
   let preferences = { ...policy.DEFAULT_PREFERENCES };
+  let tabSortMode = "eligible-first";
+  let workspaceData = null;
   let snapshot = null;
-  let pendingIndividualId = null;
+  let selectedWorkspaceId = null;
   let pendingBulk = null;
   let busy = false;
 
@@ -46,10 +53,15 @@
     return element;
   }
 
+  function displayWorkspaceName(workspace) {
+    return workspace && workspace.name ? workspace.name : "Workspace " + (workspace ? workspace.id : "");
+  }
+
   function updateControls() {
-    ui.refresh.disabled = busy;
+    ui.workspaceSelect.disabled = busy;
+    ui.tabSortSelect.disabled = busy;
     ui.confirmBulk.disabled = busy;
-    ui.reviewAll.disabled = busy || !snapshot ||
+    ui.unloadAll.disabled = busy || !snapshot ||
       snapshot.unknownWorkspaceCount > 0 || snapshot.eligibleTabs.length === 0;
     ui.tabList.querySelectorAll("button").forEach((button) => {
       button.disabled = busy;
@@ -66,48 +78,106 @@
     button.setAttribute("aria-pressed", String(isOn));
   }
 
-  async function readActiveWorkspace() {
+  async function readWorkspaceData() {
     const activeTabs = await chrome.tabs.query({ active: true, lastFocusedWindow: true });
     const activeTab = activeTabs.find((tab) => Number.isInteger(tab.id));
     if (!activeTab) {
       throw new Error("Could not identify the active tab in the last-focused browser window.");
     }
 
-    const id = normalizeId(activeTab.workspaceId);
-    if (id === null) {
-      throw new Error("This Opera GX build did not expose the active tab's workspace ID. Unloading is disabled rather than guessing from its window.");
+    const currentWorkspaceId = normalizeId(activeTab.workspaceId);
+    if (currentWorkspaceId === null) {
+      throw new Error("Opera GX did not expose the active tab's workspace ID. Workspace targeting is disabled rather than guessing from the window.");
+    }
+
+    const allTabs = await chrome.tabs.query({});
+    const workspacesById = new Map();
+    for (const tab of allTabs) {
+      const id = normalizeId(tab.workspaceId);
+      if (id === null) continue;
+      const known = workspacesById.get(id);
+      const name = typeof tab.workspaceName === "string" && tab.workspaceName.trim()
+        ? tab.workspaceName.trim()
+        : null;
+      if (!known) {
+        workspacesById.set(id, { id, name: name || "Workspace " + id });
+      } else if (name && (!known.name || known.name === "Workspace " + id)) {
+        known.name = name;
+      }
+    }
+
+    const activeWorkspaceName = typeof activeTab.workspaceName === "string" && activeTab.workspaceName.trim()
+      ? activeTab.workspaceName.trim()
+      : "Workspace " + currentWorkspaceId;
+    if (!workspacesById.has(currentWorkspaceId)) {
+      workspacesById.set(currentWorkspaceId, { id: currentWorkspaceId, name: activeWorkspaceName });
+    } else if (activeWorkspaceName && activeWorkspaceName !== "Workspace " + currentWorkspaceId) {
+      workspacesById.get(currentWorkspaceId).name = activeWorkspaceName;
+    }
+
+    const workspaces = Array.from(workspacesById.values()).sort((a, b) => {
+      if (a.id === currentWorkspaceId) return -1;
+      if (b.id === currentWorkspaceId) return 1;
+      return a.name.localeCompare(b.name) || a.id.localeCompare(b.id);
+    });
+
+    const nameCounts = new Map();
+    for (const workspace of workspaces) {
+      nameCounts.set(workspace.name, (nameCounts.get(workspace.name) || 0) + 1);
+    }
+    for (const workspace of workspaces) {
+      workspace.label = workspace.id === currentWorkspaceId
+        ? "Current workspace — " + workspace.name
+        : workspace.name + (nameCounts.get(workspace.name) > 1 ? " (ID " + workspace.id + ")" : "");
     }
 
     return {
-      id,
-      name: typeof activeTab.workspaceName === "string" && activeTab.workspaceName.trim()
-        ? activeTab.workspaceName.trim()
-        : "Workspace " + id
+      currentWorkspaceId,
+      currentWorkspaceName: activeWorkspaceName,
+      allTabs,
+      workspaces,
+      unknownWorkspaceCount: allTabs.filter((tab) => normalizeId(tab.workspaceId) === null).length
     };
   }
 
-  async function readSnapshot() {
-    const workspace = await readActiveWorkspace();
-    const allTabs = await chrome.tabs.query({});
-    const unknownWorkspaceCount = allTabs.filter((tab) => normalizeId(tab.workspaceId) === null).length;
-    const workspaceTabs = allTabs.filter((tab) => sameId(tab.workspaceId, workspace.id));
-    const evaluatedTabs = workspaceTabs.map((tab) => ({
-      tab,
-      evaluation: policy.evaluateTab(tab, workspace.id, preferences)
-    }));
+  function createSnapshot(data, targetWorkspaceId) {
+    const targetId = normalizeId(targetWorkspaceId);
+    const workspace = data.workspaces.find((item) => sameId(item.id, targetId));
+    if (!workspace) {
+      throw new Error("The selected workspace is no longer available. Choose another workspace.");
+    }
 
+    const workspaceTabs = data.allTabs.filter((tab) => sameId(tab.workspaceId, targetId));
+    const evaluatedTabs = workspaceTabs.map((tab, index) => ({
+      tab,
+      index,
+      evaluation: policy.evaluateTab(tab, targetId, preferences)
+    }));
+    const sortedTabs = policy.sortEvaluatedTabs(evaluatedTabs, tabSortMode);
     return {
       workspace,
-      unknownWorkspaceCount,
+      currentWorkspaceId: data.currentWorkspaceId,
+      unknownWorkspaceCount: data.unknownWorkspaceCount,
       workspaceTabs,
-      evaluatedTabs,
-      eligibleTabs: evaluatedTabs.filter((item) => item.evaluation.eligible).map((item) => item.tab),
-      skippedTabs: evaluatedTabs.filter((item) => !item.evaluation.eligible)
+      evaluatedTabs: sortedTabs,
+      eligibleTabs: sortedTabs.filter((item) => item.evaluation.eligible).map((item) => item.tab),
+      skippedTabs: sortedTabs.filter((item) => !item.evaluation.eligible)
     };
   }
 
-  function clearConfirmation() {
-    pendingIndividualId = null;
+  function renderWorkspaceOptions(data) {
+    const currentValue = selectedWorkspaceId;
+    ui.workspaceSelect.replaceChildren();
+    for (const workspace of data.workspaces) {
+      const option = document.createElement("option");
+      option.value = workspace.id;
+      option.textContent = workspace.label;
+      ui.workspaceSelect.appendChild(option);
+    }
+    ui.workspaceSelect.value = currentValue;
+  }
+
+  function clearBulkConfirmation() {
     pendingBulk = null;
     ui.confirmation.hidden = true;
   }
@@ -116,24 +186,24 @@
     const tab = item.tab;
     const evaluation = item.evaluation;
     const row = document.createElement("article");
-    row.className = "tab-row";
+    row.className = "tab-row " + (evaluation.eligible ? "eligible-row" : "skipped-row");
 
     const top = document.createElement("div");
     top.className = "tab-row-top";
     const details = document.createElement("div");
-    details.style.minWidth = "0";
+    details.className = "tab-details";
     appendText(details, "div", "tab-title", tab.title || "Untitled tab");
     let displayUrl = "URL unavailable";
     try {
       const parsed = new URL(tab.url);
       displayUrl = parsed.host || parsed.href;
     } catch (_error) {
-      // The policy exposes unavailable/invalid URL reasons for skipped tabs.
+      // The eligibility policy records unavailable or invalid URL reasons.
     }
     appendText(details, "div", "tab-url", displayUrl);
     top.appendChild(details);
-    appendText(top, "span", "tab-status" + (evaluation.eligible ? " eligible" : ""),
-      evaluation.eligible ? "Passed" : "Skipped");
+    appendText(top, "span", "tab-status " + (evaluation.eligible ? "eligible" : "skipped"),
+      evaluation.eligible ? "Eligible" : "Skipped");
     row.appendChild(top);
 
     if (!evaluation.eligible) {
@@ -147,7 +217,8 @@
       const button = document.createElement("button");
       button.type = "button";
       button.className = "tab-action-button";
-      button.textContent = pendingIndividualId === tab.id ? "Confirm unload" : "Review & unload";
+      button.textContent = "Unload tab";
+      button.setAttribute("aria-label", "Unload tab: " + (tab.title || "Untitled tab"));
       button.disabled = busy;
       button.addEventListener("click", () => handleIndividual(tab.id, workspaceId));
       actions.appendChild(button);
@@ -156,17 +227,29 @@
     return row;
   }
 
-  function render(nextSnapshot) {
+  function render(nextSnapshot, data) {
     snapshot = nextSnapshot;
-    ui.workspaceLabel.textContent = nextSnapshot.workspace.name + " · ID " + nextSnapshot.workspace.id;
+    workspaceData = data;
+    renderWorkspaceOptions(data);
+
+    const isCurrentWorkspace = sameId(nextSnapshot.workspace.id, data.currentWorkspaceId);
+    ui.workspaceLabel.textContent = "Managing " + displayWorkspaceName(nextSnapshot.workspace);
+    ui.workspaceScopeNote.textContent = isCurrentWorkspace
+      ? "Default selection · Current workspace"
+      : "Selected workspace · Browser workspace switching is not required.";
+    ui.summaryWorkspaceName.textContent = isCurrentWorkspace ? "Current" : "Selected";
+    ui.tabSectionTitle.textContent = "Tabs in " + displayWorkspaceName(nextSnapshot.workspace);
+    ui.tabSectionNote.textContent = "Each tab is checked again before it is unloaded.";
     ui.tabCount.textContent = String(nextSnapshot.workspaceTabs.length);
     ui.eligibleCount.textContent = String(nextSnapshot.eligibleTabs.length);
     ui.skippedCount.textContent = String(nextSnapshot.skippedTabs.length);
+
+    ui.tabSortSelect.value = tabSortMode;
     ui.tabList.replaceChildren();
 
     if (nextSnapshot.unknownWorkspaceCount > 0) {
       appendText(ui.tabList, "p", "empty-state",
-        nextSnapshot.unknownWorkspaceCount + " tab(s) have no verifiable workspace ID. Bulk unloading is blocked to avoid guessing.");
+        nextSnapshot.unknownWorkspaceCount + " tab(s) do not expose a verifiable workspace ID. Bulk unloading is blocked to avoid guessing.");
     }
 
     if (nextSnapshot.workspaceTabs.length === 0) {
@@ -177,52 +260,64 @@
       });
     }
 
-    ui.reviewAll.textContent = nextSnapshot.unknownWorkspaceCount > 0
+    ui.unloadAll.textContent = nextSnapshot.unknownWorkspaceCount > 0
       ? "Bulk unload blocked: unknown workspace IDs"
-      : "Review " + nextSnapshot.eligibleTabs.length + " eligible tab(s)";
+      : "Unload " + nextSnapshot.eligibleTabs.length + " eligible tab" + (nextSnapshot.eligibleTabs.length === 1 ? "" : "s");
     updateControls();
   }
 
   async function refresh({ allowWhileBusy = false, clearPending = true } = {}) {
     if (busy && !allowWhileBusy) return;
-    if (clearPending) clearConfirmation();
+    if (clearPending) clearBulkConfirmation();
 
-    setStatus("Reading tab metadata and checking workspace identity…");
+    setStatus("Checking workspace and tab eligibility…");
     try {
-      const next = await readSnapshot();
-      render(next);
-      if (next.unknownWorkspaceCount > 0) {
-        setStatus("Safety hold: workspace identity is missing for one or more tabs. Bulk unloading is blocked.");
+      const data = await readWorkspaceData();
+      if (selectedWorkspaceId === null ||
+          !data.workspaces.some((item) => sameId(item.id, selectedWorkspaceId))) {
+        selectedWorkspaceId = data.currentWorkspaceId;
+      }
+      const next = createSnapshot(data, selectedWorkspaceId);
+      render(next, data);
+
+      if (nextSnapshotHasUnknownWorkspace(next)) {
+        setStatus("Safety hold: " + data.unknownWorkspaceCount +
+          " tab(s) have unknown workspace identity. Bulk unloading is blocked.");
       } else {
-        setStatus("Preflight complete. " + next.eligibleTabs.length + " tab(s) passed; " +
+        setStatus("Checked " + next.workspaceTabs.length + " tab(s) in " +
+          next.workspace.name + ": " + next.eligibleTabs.length + " eligible, " +
           next.skippedTabs.length + " skipped.");
       }
     } catch (error) {
       snapshot = null;
+      workspaceData = null;
       ui.workspaceLabel.textContent = "Workspace could not be verified";
+      ui.workspaceSelect.replaceChildren();
+      appendText(ui.workspaceSelect, "option", "", "Workspace unavailable");
+      ui.workspaceSelect.disabled = true;
       ui.tabCount.textContent = "—";
       ui.eligibleCount.textContent = "—";
       ui.skippedCount.textContent = "—";
+      ui.summaryWorkspaceName.textContent = "Unavailable";
       ui.tabList.replaceChildren();
       appendText(ui.tabList, "p", "empty-state",
         error instanceof Error ? error.message : "Unable to read the current workspace.");
-      ui.reviewAll.disabled = true;
-      ui.refresh.disabled = false;
+      ui.unloadAll.disabled = true;
       setStatus("No tabs were unloaded.");
     }
   }
 
-  async function inspectTab(tabId, expectedWorkspaceId, requireCompleteMap) {
-    const activeWorkspace = await readActiveWorkspace();
-    if (!sameId(activeWorkspace.id, expectedWorkspaceId)) {
-      throw new Error("The active workspace changed. Refresh the list and review the new workspace.");
-    }
+  function nextSnapshotHasUnknown(nextSnapshot) {
+    return nextSnapshot.unknownWorkspaceCount > 0;
+  }
 
-    if (requireCompleteMap) {
-      const allTabs = await chrome.tabs.query({});
-      if (allTabs.some((tab) => normalizeId(tab.workspaceId) === null)) {
-        throw new Error("Workspace identity became ambiguous during bulk unloading. Remaining tabs were not attempted.");
-      }
+  async function inspectTab(tabId, expectedWorkspaceId, requireCompleteMap) {
+    const data = await readWorkspaceData();
+    if (!data.workspaces.some((item) => sameId(item.id, expectedWorkspaceId))) {
+      throw new Error("The selected workspace no longer exists. No tab was unloaded.");
+    }
+    if (requireCompleteMap && data.unknownWorkspaceCount > 0) {
+      throw new Error("Workspace identity became ambiguous during bulk unloading. Remaining tabs were not attempted.");
     }
 
     const tab = await chrome.tabs.get(tabId);
@@ -230,13 +325,14 @@
     return { tab, evaluation };
   }
 
-  async function discardOne(tabId, expectedWorkspaceId, requireCompleteMap = false) {
-    const { tab, evaluation } = await inspectTab(tabId, expectedWorkspaceId, requireCompleteMap);
-    if (!evaluation.eligible) {
+  async function discardOne(tabId, expectedWorkspaceId, requireCompleteMap) {
+    const result = await inspectTab(tabId, expectedWorkspaceId, requireCompleteMap === true);
+    const tab = result.tab;
+    if (!result.evaluation.eligible) {
       return {
         ok: false,
         skipped: true,
-        message: "Skipped “" + (tab.title || "Tab") + "”: " + evaluation.reasons.join(" ")
+        message: "Skipped “" + (tab.title || "Tab") + "”: " + result.evaluation.reasons.join(" ")
       };
     }
 
@@ -249,61 +345,47 @@
         message: (tab.title || "Tab") + ": Opera GX did not confirm that it was discarded."
       };
     }
-    return { ok: true, skipped: false, message: (tab.title || "Tab") + " was discarded." };
+    return { ok: true, skipped: false, message: (tab.title || "Tab") + " was unloaded." };
   }
 
-  async function handleIndividual(tabId, workspaceId) {
+  async function handleIndividual(tabId, targetWorkspaceId) {
     if (busy) return;
+    busy = true;
+    updateControls();
     try {
-      const { tab, evaluation } = await inspectTab(tabId, workspaceId, false);
-      if (!evaluation.eligible) {
-        pendingIndividualId = null;
-        setStatus("Skipped: " + evaluation.reasons.join(" "));
-        await refresh({ clearPending: false });
-        return;
-      }
-
-      if (pendingIndividualId !== tabId) {
-        pendingIndividualId = tabId;
-        pendingBulk = null;
-        ui.confirmation.hidden = true;
-        render(snapshot);
-        setStatus("Review “" + (tab.title || "this tab") +
-          "”. Discarding reloads the page later and may lose unsaved application-only state. Click Confirm unload to continue.");
-        return;
-      }
-
-      busy = true;
-      updateControls();
-      setStatus("Rechecking tab immediately before discard…");
-      const result = await discardOne(tabId, workspaceId);
-      pendingIndividualId = null;
+      setStatus("Rechecking tab immediately before unloading…");
+      const result = await discardOne(tabId, targetWorkspaceId, false);
       await refresh({ allowWhileBusy: true, clearPending: false });
       setStatus(result.message);
     } catch (error) {
-      pendingIndividualId = null;
       await refresh({ allowWhileBusy: true, clearPending: false });
       setStatus(error instanceof Error ? error.message : "The tab could not be safely checked.");
     } finally {
       busy = false;
-      if (snapshot) render(snapshot);
+      if (snapshot && workspaceData) render(snapshot, workspaceData);
       else updateControls();
     }
   }
 
   async function beginBulkReview() {
     if (busy) return;
-    pendingIndividualId = null;
     try {
-      const latest = await readSnapshot();
-      render(latest);
+      const data = await readWorkspaceData();
+      if (selectedWorkspaceId === null ||
+          !data.workspaces.some((item) => sameId(item.id, selectedWorkspaceId))) {
+        selectedWorkspaceId = data.currentWorkspaceId;
+      }
+      const latest = createSnapshot(data, selectedWorkspaceId);
+      render(latest, data);
+
       if (latest.unknownWorkspaceCount > 0) {
-        clearConfirmation();
-        setStatus("Bulk unload blocked because not every tab has a verifiable workspace ID.");
+        clearBulkConfirmation();
+        setStatus("Bulk unload blocked because " + latest.unknownWorkspaceCount +
+          " tab(s) have no verifiable workspace ID.");
         return;
       }
       if (latest.eligibleTabs.length === 0) {
-        setStatus("No tabs passed the current safety checks.");
+        setStatus("No tabs passed the current preferences and safety checks.");
         return;
       }
 
@@ -311,41 +393,47 @@
         workspaceId: latest.workspace.id,
         tabIds: latest.eligibleTabs.map((tab) => tab.id)
       };
-      ui.confirmationText.textContent = "Unload " + pendingBulk.tabIds.length + " tab(s) in “" +
-        latest.workspace.name + "”? Each tab will be checked again just before discard. Unsaved application state cannot be detected reliably.";
+      ui.confirmationText.textContent = "Unload " + pendingBulk.tabIds.length + " eligible tab(s) in “" +
+        latest.workspace.name + "”? Every tab will be checked again immediately before unloading.";
       ui.confirmation.hidden = false;
-      setStatus("Review the warning, then confirm to begin sequential unloading.");
+      setStatus("Confirm the bulk operation below to proceed. Individual tabs unload without this confirmation.");
     } catch (error) {
-      setStatus(error instanceof Error ? error.message : "Could not verify the workspace; no tabs were unloaded.");
+      setStatus(error instanceof Error ? error.message : "Could not verify workspace membership; no tabs were unloaded.");
     }
   }
 
   async function confirmBulk() {
     if (busy || !pendingBulk) return;
     const operation = pendingBulk;
+    if (!sameId(selectedWorkspaceId, operation.workspaceId)) {
+      clearBulkConfirmation();
+      setStatus("The selected workspace changed. Review the new selection before unloading.");
+      return;
+    }
+
     busy = true;
     ui.confirmation.hidden = true;
     updateControls();
     let succeeded = 0;
     let skipped = 0;
     let failed = 0;
+    let aborted = false;
     const messages = [];
 
     try {
-      const before = await readSnapshot();
-      if (!sameId(before.workspace.id, operation.workspaceId)) {
-        throw new Error("The active workspace changed before confirmation. No tabs were unloaded.");
+      const data = await readWorkspaceData();
+      if (data.unknownWorkspaceCount > 0) {
+        throw new Error("Bulk unload stopped because one or more tabs have unknown workspace identity.");
       }
-      if (before.unknownWorkspaceCount > 0) {
-        throw new Error("Bulk unload stopped because workspace identity is ambiguous.");
-      }
-      const candidateIds = before.eligibleTabs.map((tab) => tab.id);
-      const sameCandidates = candidateIds.length === operation.tabIds.length &&
-        candidateIds.every((id) => operation.tabIds.includes(id));
+      const before = createSnapshot(data, operation.workspaceId);
+      const currentIds = before.eligibleTabs.map((tab) => tab.id).sort((a, b) => a - b);
+      const expectedIds = operation.tabIds.slice().sort((a, b) => a - b);
+      const sameCandidates = currentIds.length === expectedIds.length &&
+        currentIds.every((id, index) => id === expectedIds[index]);
       if (!sameCandidates) {
         pendingBulk = null;
-        render(before);
-        setStatus("The candidate set changed since review. Nothing was unloaded; review the refreshed list again.");
+        render(before, data);
+        setStatus("The eligible tab list changed after review. Nothing was unloaded; review the refreshed list again.");
         return;
       }
 
@@ -359,10 +447,11 @@
           messages.push(result.message);
         } catch (error) {
           failed++;
-          messages.push(error instanceof Error ? error.message : "A tab discard failed.");
+          messages.push(error instanceof Error ? error.message : "A tab unload failed.");
           if (error instanceof Error &&
-              (error.message.includes("active workspace changed") ||
-               error.message.includes("Workspace identity became ambiguous"))) {
+              (error.message.includes("workspace no longer exists") ||
+               error.message.includes("identity became ambiguous"))) {
+            aborted = true;
             break;
           }
         }
@@ -370,29 +459,21 @@
 
       pendingBulk = null;
       await refresh({ allowWhileBusy: true, clearPending: false });
-      setStatus("Bulk operation finished: " + succeeded + " discarded, " + skipped +
-        " skipped on recheck, " + failed + " failed. " + messages.slice(0, 2).join(" "));
+      setStatus("Bulk result: " + succeeded + " unloaded, " + skipped + " skipped on recheck, " +
+        failed + " failed." + (aborted ? " Remaining tabs were not attempted." : "") +
+        (messages.length > 0 ? " " + messages.slice(0, 2).join(" ") : ""));
     } catch (error) {
       pendingBulk = null;
       await refresh({ allowWhileBusy: true, clearPending: false });
       setStatus(error instanceof Error ? error.message : "Bulk operation aborted safely.");
     } finally {
       busy = false;
-      if (snapshot) render(snapshot);
+      if (snapshot && workspaceData) render(snapshot, workspaceData);
       else updateControls();
     }
   }
 
-  async function loadPreferences() {
-    const keys = Object.keys(policy.DEFAULT_PREFERENCES);
-    try {
-      const stored = await chrome.storage.local.get(keys);
-      preferences = { ...policy.DEFAULT_PREFERENCES, ...stored };
-    } catch (_error) {
-      preferences = { ...policy.DEFAULT_PREFERENCES };
-      setStatus("Preferences could not be loaded. Conservative defaults are active for this session.");
-    }
-
+  function enableSafetyPreferenceButtons() {
     document.querySelectorAll(".preference-toggle[data-pref]").forEach((button) => {
       const key = button.dataset.pref;
       renderPreferenceToggle(button, preferences[key] === true);
@@ -401,34 +482,77 @@
         const enabled = !(preferences[key] === true);
         preferences = { ...preferences, [key]: enabled };
         renderPreferenceToggle(button, enabled);
-        clearConfirmation();
+        clearBulkConfirmation();
         updateControls();
         try {
           await chrome.storage.local.set({ [key]: enabled });
         } catch (_error) {
-          setStatus("Could not save the preference. It is active for this popup session only.");
+          setStatus("Could not save that preference. The change remains active for this popup session.");
         }
         await refresh({ clearPending: false });
       });
     });
   }
 
-  ui.refresh.addEventListener("click", () => refresh());
-  ui.reviewAll.addEventListener("click", beginBulkReview);
+  ui.workspaceSelect.addEventListener("change", async () => {
+    if (busy) return;
+    selectedWorkspaceId = normalizeId(ui.workspaceSelect.value);
+    clearBulkConfirmation();
+    await refresh({ clearPending: false });
+  });
+
+  ui.tabSortSelect.addEventListener("change", async () => {
+    if (busy) return;
+    const value = ui.tabSortSelect.value;
+    if (!["eligible-first", "eligible-last", "tab-order"].includes(value)) return;
+    tabSortMode = value;
+    try {
+      await chrome.storage.local.set({ tabSortMode });
+    } catch (_error) {
+      setStatus("The sort choice is active for this popup session but could not be saved.");
+    }
+    if (workspaceData && snapshot) {
+      const next = createSnapshot(workspaceData, selectedWorkspaceId);
+      render(next, workspaceData);
+    }
+  });
+
+  ui.unloadAll.addEventListener("click", beginBulkReview);
   ui.cancelBulk.addEventListener("click", () => {
-    pendingBulk = null;
-    ui.confirmation.hidden = true;
+    clearBulkConfirmation();
     setStatus("Bulk unload cancelled. No tabs were unloaded.");
   });
   ui.confirmBulk.addEventListener("click", confirmBulk);
 
+  async function loadPreferences() {
+    const keys = [...Object.keys(policy.DEFAULT_PREFERENCES), "tabSortMode"];
+    try {
+      const stored = await chrome.storage.local.get(keys);
+      preferences = { ...policy.DEFAULT_PREFERENCES };
+      for (const key of Object.keys(policy.DEFAULT_PREFERENCES)) {
+        if (typeof stored[key] === "boolean") preferences[key] = stored[key];
+      }
+      if (["eligible-first", "eligible-last", "tab-order"].includes(stored.tabSortMode)) {
+        tabSortMode = stored.tabSortMode;
+      }
+    } catch (_error) {
+      preferences = { ...policy.DEFAULT_PREFERENCES };
+      tabSortMode = "eligible-first";
+      setStatus("Saved preferences could not be loaded. Conservative defaults are active for this session.");
+    }
+    enableSafetyPreferenceButtons();
+    ui.tabSortSelect.value = tabSortMode;
+  }
+
   (async function init() {
     if (!chrome.tabs || typeof chrome.tabs.discard !== "function") {
       setStatus("This browser build does not expose tabs.discard. Nothing was unloaded.");
-      ui.reviewAll.disabled = true;
+      ui.unloadAll.disabled = true;
       return;
     }
     await loadPreferences();
+    // The selector always starts with the current workspace whenever the popup opens.
+    selectedWorkspaceId = null;
     await refresh();
   })();
 })();
