@@ -131,3 +131,12 @@ test('tab-order sorting preserves browser query order', () => {
   ];
   assert.deepEqual(policy.sortEvaluatedTabs(items, 'tab-order').map((item) => item.tab.id), [2, 3, 1]);
 });
+
+const fs = require('node:fs');
+const path = require('node:path');
+const popupSource = fs.readFileSync(path.join(__dirname, '../src/popup.js'), 'utf8');
+
+test('workspace refresh uses a real snapshot property for the unknown-workspace guard', () => {
+  assert.match(popupSource, /if \(next\.unknownWorkspaceCount > 0\)/);
+  assert.doesNotMatch(popupSource, /nextSnapshotHasUnknownWorkspace/);
+});
