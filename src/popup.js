@@ -20,7 +20,8 @@
     tabSectionNote: $("#tab-section-note"),
     tabSortSelect: $("#tab-sort-select"),
     tabList: $("#tab-list"),
-    status: $("#status")
+    status: $("#status"),
+    retry: $("#retry-button")
   };
 
   let preferences = { ...policy.DEFAULT_PREFERENCES };
@@ -58,9 +59,11 @@
   }
 
   function updateControls() {
-    ui.workspaceSelect.disabled = busy;
-    ui.tabSortSelect.disabled = busy;
+    ui.workspaceSelect.disabled = busy || !workspaceData;
+    ui.tabSortSelect.disabled = busy || !snapshot;
     ui.confirmBulk.disabled = busy;
+    ui.retry.disabled = busy;
+    ui.retry.hidden = Boolean(workspaceData);
     ui.unloadAll.disabled = busy || !snapshot ||
       snapshot.unknownWorkspaceCount > 0 || snapshot.eligibleTabs.length === 0;
     ui.tabList.querySelectorAll("button").forEach((button) => {
@@ -289,21 +292,34 @@
           next.skippedTabs.length + " skipped.");
       }
     } catch (error) {
+      const detail = error instanceof Error && error.message
+        ? error.message
+        : "An unknown browser API error occurred.";
       snapshot = null;
       workspaceData = null;
-      ui.workspaceLabel.textContent = "Workspace could not be verified";
+      selectedWorkspaceId = null;
+      clearBulkConfirmation();
+
+      // Clear every workspace-specific field so an old workspace name/count/button
+      // can never remain visible beside an unavailable-state message.
+      ui.workspaceLabel.textContent = "Workspace unavailable";
+      ui.workspaceScopeNote.textContent = "Workspace detection failed. Retry or close and reopen this popup.";
       ui.workspaceSelect.replaceChildren();
       appendText(ui.workspaceSelect, "option", "", "Workspace unavailable");
-      ui.workspaceSelect.disabled = true;
       ui.tabCount.textContent = "—";
       ui.eligibleCount.textContent = "—";
       ui.skippedCount.textContent = "—";
       ui.summaryWorkspaceName.textContent = "Unavailable";
+      ui.tabSectionTitle.textContent = "Workspace tabs unavailable";
+      ui.tabSectionNote.textContent = "No tab actions are available until workspace detection succeeds.";
       ui.tabList.replaceChildren();
-      appendText(ui.tabList, "p", "empty-state",
-        error instanceof Error ? error.message : "Unable to read the current workspace.");
+      appendText(ui.tabList, "p", "empty-state", detail);
+      ui.unloadAll.textContent = "Workspace unavailable";
       ui.unloadAll.disabled = true;
-      setStatus("No tabs were unloaded.");
+      ui.tabSortSelect.value = tabSortMode;
+      ui.retry.hidden = false;
+      setStatus("Workspace check failed: " + detail + " No tabs were unloaded.");
+      updateControls();
     }
   }
 
@@ -517,6 +533,7 @@
     }
   });
 
+  ui.retry.addEventListener("click", () => refresh());
   ui.unloadAll.addEventListener("click", beginBulkReview);
   ui.cancelBulk.addEventListener("click", () => {
     clearBulkConfirmation();
