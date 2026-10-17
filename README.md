@@ -4,6 +4,8 @@ A small, local-only Manifest V3 extension for reviewing tabs in Opera GX workspa
 
 ## Features
 
+- **Visible diagnostics:** If workspace detection fails, the popup clears stale tab counts/actions, shows the underlying error, and exposes a retry control. It never leaves an old bulk-unload count visible beside an error.
+
 - **Workspace selector:** The popup defaults to the current workspace each time it opens, but you can select another detected workspace without switching to it in Opera GX.
 - **Workspace-specific targeting:** Tabs are selected by Opera's `workspaceId`, not by window ID.
 - **Immediate individual unloading:** Clicking **Unload tab** runs the safety preflight again and discards that tab without a separate confirmation.
