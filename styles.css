@@ -109,6 +109,21 @@ p { line-height: 1.45; }
 .confirmation { margin-top: 10px; padding: 11px; border: 1px solid color-mix(in srgb, #d98c20 50%, var(--border) 50%); border-radius: 9px; background: color-mix(in srgb, #d98c20 12%, Canvas 88%); }
 .confirmation p { margin: 0 0 10px; font-size: 13px; line-height: 1.45; }
 .confirmation-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.diagnostics-panel { padding: 0; overflow: hidden; }
+.diagnostics-panel > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 50px;
+  padding: 9px 12px;
+  cursor: pointer;
+  list-style: none;
+}
+.diagnostics-panel > summary::-webkit-details-marker { display: none; }
+.diagnostics-content { padding: 0 12px 12px; border-top: 1px solid var(--border); }
+.diagnostics-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.diagnostics-actions .secondary-button { min-height: 34px; font-size: 12px; }
 .status-panel { padding: 9px 11px; border-left: 3px solid color-mix(in srgb, #4388df 70%, var(--border) 30%); border-radius: 5px 9px 9px 5px; background: color-mix(in srgb, #4388df 7%, Canvas 93%); }
 .status-row { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; }
 #status { flex: 1; min-width: 0; margin: 0; font-size: 12px; line-height: 1.45; }
