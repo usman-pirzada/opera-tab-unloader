@@ -569,6 +569,16 @@
 
     try {
       const data = await readWorkspaceData();
+      if (!policy.isSameWorkspace(operation.workspaceId, data.currentWorkspaceId)) {
+        await recordDiagnostic({
+          event: "bulk-aborted-workspace-changed",
+          action: "bulk-discard",
+          targetWorkspaceId: normalizeId(operation.workspaceId),
+          activeWorkspaceId: data.currentWorkspaceId,
+          reason: "The active workspace changed before the bulk operation began."
+        });
+        throw new Error("The active workspace changed before bulk unloading. Switch to the target workspace in GX and review the list again.");
+      }
       if (data.unknownWorkspaceCount > 0) {
         throw new Error("Bulk unload stopped because one or more tabs have unknown workspace identity.");
       }
@@ -597,7 +607,8 @@
           messages.push(error instanceof Error ? error.message : "A tab unload failed.");
           if (error instanceof Error &&
               (error.message.includes("workspace no longer exists") ||
-               error.message.includes("identity became ambiguous"))) {
+               error.message.includes("identity became ambiguous") ||
+               error.message.includes("Cross-workspace unloading is temporarily disabled"))) {
             aborted = true;
             break;
           }
