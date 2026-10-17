@@ -140,3 +140,20 @@ test('workspace refresh uses a real snapshot property for the unknown-workspace 
   assert.match(popupSource, /if \(next\.unknownWorkspaceCount > 0\)/);
   assert.doesNotMatch(popupSource, /nextSnapshotHasUnknownWorkspace/);
 });
+
+test('unloading is permitted only for the active workspace', () => {
+  assert.equal(policy.isSameWorkspace('3', '3'), true);
+  assert.equal(policy.isSameWorkspace(3, '3'), true);
+  assert.equal(policy.isSameWorkspace('other', '3'), false);
+  assert.equal(policy.isSameWorkspace(undefined, '3'), false);
+  assert.equal(policy.isSameWorkspace('3', null), false);
+});
+
+test('discard path contains a fail-closed cross-workspace guard before the browser API call', () => {
+  const guard = popupSource.indexOf('if (!policy.isSameWorkspace(expectedWorkspaceId, data.currentWorkspaceId))');
+  const discard = popupSource.indexOf('apiResult = await chrome.tabs.discard(tabId)');
+  assert.ok(guard >= 0, 'cross-workspace guard is present');
+  assert.ok(discard > guard, 'the guard appears before tabs.discard');
+  assert.match(popupSource, /event: "discard-requested"/);
+  assert.match(popupSource, /event: after\.discarded === true \? "discard-confirmed" : "discard-not-confirmed"/);
+});
