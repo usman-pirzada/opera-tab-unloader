@@ -291,6 +291,7 @@
           next.workspace.name + ": " + next.eligibleTabs.length + " eligible, " +
           next.skippedTabs.length + " skipped.");
       }
+      return true;
     } catch (error) {
       const detail = error instanceof Error && error.message
         ? error.message
@@ -320,6 +321,7 @@
       ui.retry.hidden = false;
       setStatus("Workspace check failed: " + detail + " No tabs were unloaded.");
       updateControls();
+      return false;
     }
   }
 
@@ -371,11 +373,13 @@
     try {
       setStatus("Rechecking tab immediately before unloading…");
       const result = await discardOne(tabId, targetWorkspaceId, false);
-      await refresh({ allowWhileBusy: true, clearPending: false });
-      setStatus(result.message);
+      const refreshed = await refresh({ allowWhileBusy: true, clearPending: false });
+      if (refreshed) setStatus(result.message);
     } catch (error) {
-      await refresh({ allowWhileBusy: true, clearPending: false });
-      setStatus(error instanceof Error ? error.message : "The tab could not be safely checked.");
+      const refreshed = await refresh({ allowWhileBusy: true, clearPending: false });
+      if (refreshed) {
+        setStatus(error instanceof Error ? error.message : "The tab could not be safely checked.");
+      }
     } finally {
       busy = false;
       if (snapshot && workspaceData) render(snapshot, workspaceData);
@@ -474,14 +478,18 @@
       }
 
       pendingBulk = null;
-      await refresh({ allowWhileBusy: true, clearPending: false });
-      setStatus("Bulk result: " + succeeded + " unloaded, " + skipped + " skipped on recheck, " +
-        failed + " failed." + (aborted ? " Remaining tabs were not attempted." : "") +
-        (messages.length > 0 ? " " + messages.slice(0, 2).join(" ") : ""));
+      const refreshed = await refresh({ allowWhileBusy: true, clearPending: false });
+      if (refreshed) {
+        setStatus("Bulk result: " + succeeded + " unloaded, " + skipped + " skipped on recheck, " +
+          failed + " failed." + (aborted ? " Remaining tabs were not attempted." : "") +
+          (messages.length > 0 ? " " + messages.slice(0, 2).join(" ") : ""));
+      }
     } catch (error) {
       pendingBulk = null;
-      await refresh({ allowWhileBusy: true, clearPending: false });
-      setStatus(error instanceof Error ? error.message : "Bulk operation aborted safely.");
+      const refreshed = await refresh({ allowWhileBusy: true, clearPending: false });
+      if (refreshed) {
+        setStatus(error instanceof Error ? error.message : "Bulk operation aborted safely.");
+      }
     } finally {
       busy = false;
       if (snapshot && workspaceData) render(snapshot, workspaceData);
