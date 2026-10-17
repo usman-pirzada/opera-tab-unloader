@@ -283,7 +283,7 @@
       const next = createSnapshot(data, selectedWorkspaceId);
       render(next, data);
 
-      if (nextSnapshotHasUnknownWorkspace(next)) {
+      if (next.unknownWorkspaceCount > 0) {
         setStatus("Safety hold: " + data.unknownWorkspaceCount +
           " tab(s) have unknown workspace identity. Bulk unloading is blocked.");
       } else {
@@ -325,9 +325,6 @@
     }
   }
 
-  function nextSnapshotHasUnknown(nextSnapshot) {
-    return nextSnapshot.unknownWorkspaceCount > 0;
-  }
 
   async function inspectTab(tabId, expectedWorkspaceId, requireCompleteMap) {
     const data = await readWorkspaceData();
