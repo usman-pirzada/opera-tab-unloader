@@ -110,7 +110,9 @@ p { line-height: 1.45; }
 .confirmation p { margin: 0 0 10px; font-size: 13px; line-height: 1.45; }
 .confirmation-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .status-panel { padding: 9px 11px; border-left: 3px solid color-mix(in srgb, #4388df 70%, var(--border) 30%); border-radius: 5px 9px 9px 5px; background: color-mix(in srgb, #4388df 7%, Canvas 93%); }
-#status { margin: 0; font-size: 12px; line-height: 1.45; }
+.status-row { display: flex; align-items: flex-start; gap: 10px; justify-content: space-between; }
+#status { flex: 1; min-width: 0; margin: 0; font-size: 12px; line-height: 1.45; }
+.retry-button { flex: 0 0 auto; min-height: 30px; padding: 5px 9px; border: 1px solid var(--border); border-radius: 7px; background: Canvas; color: CanvasText; font-size: 11px; font-weight: 800; }
 .footer-note { margin: 5px 0 0; font-size: 11px; }
 .tab-section { background: var(--surface); }
 .tabs-heading { align-items: flex-start; margin-bottom: 11px; }
