@@ -77,6 +77,24 @@
       <p class="footer-note">Local-only · No website scripts · No network requests</p>
     </section>
 
+    <details class="panel diagnostics-panel" id="diagnostics-panel">
+      <summary>
+        <span class="summary-copy">
+          <span class="panel-title">Diagnostics</span>
+          <span class="panel-subtitle">Local log for troubleshooting discard attempts</span>
+        </span>
+        <span class="summary-chevron" aria-hidden="true">⌄</span>
+      </summary>
+      <div class="diagnostics-content">
+        <p class="field-note">The log stores timestamps, tab/workspace IDs and browser-visible state only. It does not store page titles or URLs. If GX exits during a discard, the last event can help identify which API call was in progress.</p>
+        <div class="diagnostics-actions">
+          <button id="export-diagnostics-button" class="secondary-button" type="button">Export diagnostic log</button>
+          <button id="clear-diagnostics-button" class="secondary-button" type="button">Clear log</button>
+        </div>
+        <p id="diagnostics-status" class="field-note" role="status" aria-live="polite">No diagnostics loaded.</p>
+      </div>
+    </details>
+
     <section class="panel tab-section" aria-labelledby="tabs-title">
       <div class="section-title-row tabs-heading">
         <div>
