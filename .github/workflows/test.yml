@@ -1,4 +1,4 @@
-name: Tests
+name: Tests and package
 
 on:
   push:
@@ -21,5 +21,27 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node-version }}
-      - name: Run policy tests
+      - name: Run policy tests and syntax checks
         run: npm test
+
+      - name: Validate manifest JSON
+        run: node -e "JSON.parse(require('node:fs').readFileSync('manifest.json', 'utf8'))"
+
+      - name: Package extension
+        if: matrix.node-version == 20 && github.event_name != 'pull_request'
+        id: package
+        shell: bash
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          mkdir -p dist
+          zip -r "dist/opera-tab-unloader-v${version}.zip" manifest.json popup.html styles.css src README.md
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload extension ZIP
+        if: matrix.node-version == 20 && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: opera-tab-unloader-v${{ steps.package.outputs.version }}
+          path: dist/opera-tab-unloader-v${{ steps.package.outputs.version }}.zip
+          if-no-files-found: error
+          retention-days: 30
