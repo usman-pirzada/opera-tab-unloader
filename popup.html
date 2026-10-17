@@ -70,7 +70,10 @@
     </section>
 
     <section class="status-panel" aria-label="Extension status">
-      <p id="status" role="status" aria-live="polite">Checking browser capabilities…</p>
+      <div class="status-row">
+        <p id="status" role="status" aria-live="polite">Checking browser capabilities…</p>
+        <button id="retry-button" class="retry-button" type="button" hidden>Retry</button>
+      </div>
       <p class="footer-note">Local-only · No website scripts · No network requests</p>
     </section>
 
