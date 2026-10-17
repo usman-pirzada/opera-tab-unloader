@@ -103,3 +103,31 @@ test('rejects missing or invalid tab identifiers', () => {
   assert.equal(policy.evaluateTab(safeTab({ id: undefined }), '3', {}).eligible, false);
   assert.equal(policy.evaluateTab(null, '3', {}).eligible, false);
 });
+
+test('sorts eligible tabs first while preserving relative order within groups', () => {
+  const items = [
+    { tab: { id: 1 }, index: 0, evaluation: { eligible: false } },
+    { tab: { id: 2 }, index: 1, evaluation: { eligible: true } },
+    { tab: { id: 3 }, index: 2, evaluation: { eligible: false } },
+    { tab: { id: 4 }, index: 3, evaluation: { eligible: true } }
+  ];
+  assert.deepEqual(policy.sortEvaluatedTabs(items, 'eligible-first').map((item) => item.tab.id), [2, 4, 1, 3]);
+});
+
+test('sorts eligible tabs last while preserving relative order within groups', () => {
+  const items = [
+    { tab: { id: 1 }, index: 0, evaluation: { eligible: true } },
+    { tab: { id: 2 }, index: 1, evaluation: { eligible: false } },
+    { tab: { id: 3 }, index: 2, evaluation: { eligible: true } }
+  ];
+  assert.deepEqual(policy.sortEvaluatedTabs(items, 'eligible-last').map((item) => item.tab.id), [2, 1, 3]);
+});
+
+test('tab-order sorting preserves browser query order', () => {
+  const items = [
+    { tab: { id: 1 }, index: 2, evaluation: { eligible: true } },
+    { tab: { id: 2 }, index: 0, evaluation: { eligible: false } },
+    { tab: { id: 3 }, index: 1, evaluation: { eligible: true } }
+  ];
+  assert.deepEqual(policy.sortEvaluatedTabs(items, 'tab-order').map((item) => item.tab.id), [2, 3, 1]);
+});
