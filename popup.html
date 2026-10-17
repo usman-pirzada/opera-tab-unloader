@@ -12,44 +12,61 @@
       <div>
         <p class="eyebrow">OPERA GX</p>
         <h1>Workspace Tab Unloader</h1>
-        <p id="workspace-label" class="muted">Detecting active workspace…</p>
+        <p id="workspace-label" class="muted">Detecting workspaces…</p>
       </div>
-      <button id="refresh-button" class="icon-button" type="button" title="Refresh tab list" aria-label="Refresh tab list">↻</button>
     </header>
 
-    <section class="preferences" aria-labelledby="preferences-title">
-      <h2 id="preferences-title">Safety checks</h2>
-      <div class="preference">
-        <span id="pref-pinned-label">Skip pinned tabs</span>
-        <button type="button" class="preference-toggle is-on" data-pref="skipPinnedTabs" aria-labelledby="pref-pinned-label" aria-pressed="true">ON</button>
-      </div>
-      <div class="preference">
-        <span id="pref-audible-label">Skip tabs currently audible</span>
-        <button type="button" class="preference-toggle is-on" data-pref="skipAudibleTabs" aria-labelledby="pref-audible-label" aria-pressed="true">ON</button>
-      </div>
-      <div class="preference">
-        <span id="pref-auto-discard-label">Skip tabs marked non-auto-discardable</span>
-        <button type="button" class="preference-toggle is-on" data-pref="skipNonAutoDiscardableTabs" aria-labelledby="pref-auto-discard-label" aria-pressed="true">ON</button>
-      </div>
-      <p class="hint">Active tabs, loading tabs, already-discarded tabs, private tabs and non-web/internal pages are always excluded.</p>
+    <section class="panel workspace-panel" aria-labelledby="workspace-title">
+      <label id="workspace-title" class="field-label" for="workspace-select">Workspace to manage</label>
+      <select id="workspace-select" class="select-control" aria-label="Workspace to manage">
+        <option>Loading workspaces…</option>
+      </select>
+      <p id="workspace-scope-note" class="field-note">Starts with the current workspace each time the popup opens.</p>
     </section>
 
-    <section class="summary" aria-label="Workspace tab summary">
-      <div class="metric"><span id="workspace-tab-count" class="metric-value">—</span><span class="metric-label">Tabs in workspace</span></div>
-      <div class="metric"><span id="eligible-count" class="metric-value">—</span><span class="metric-label">Passed checks</span></div>
-      <div class="metric"><span id="skipped-count" class="metric-value">—</span><span class="metric-label">Skipped</span></div>
-    </section>
-
-    <div class="bulk-row">
-      <button id="review-all-button" class="primary-button" type="button" disabled>Review eligible tabs</button>
-    </div>
-
-    <section id="bulk-confirmation" class="confirmation" hidden aria-live="polite">
-      <p id="bulk-confirmation-text"></p>
-      <div class="confirmation-actions">
-        <button id="cancel-bulk-button" class="secondary-button" type="button">Cancel</button>
-        <button id="confirm-bulk-button" class="danger-button" type="button">Confirm unload</button>
+    <details class="panel settings-panel" id="settings-panel">
+      <summary>
+        <span class="summary-copy">
+          <span class="panel-title">Preferences</span>
+          <span class="panel-subtitle">Choose which tabs to protect</span>
+        </span>
+        <span class="summary-chevron" aria-hidden="true">⌄</span>
+      </summary>
+      <div class="settings-content">
+        <div class="preference">
+          <span id="pref-pinned-label">Skip pinned tabs</span>
+          <button type="button" class="preference-toggle is-on" data-pref="skipPinnedTabs" aria-labelledby="pref-pinned-label" aria-pressed="true">ON</button>
+        </div>
+        <div class="preference">
+          <span id="pref-audible-label">Skip tabs currently audible</span>
+          <button type="button" class="preference-toggle is-on" data-pref="skipAudibleTabs" aria-labelledby="pref-audible-label" aria-pressed="true">ON</button>
+        </div>
+        <div class="preference">
+          <span id="pref-auto-discard-label">Skip tabs marked non-auto-discardable</span>
+          <button type="button" class="preference-toggle is-on" data-pref="skipNonAutoDiscardableTabs" aria-labelledby="pref-auto-discard-label" aria-pressed="true">ON</button>
+        </div>
+        <p class="field-note">Active tabs, loading tabs, already-discarded tabs, private tabs and non-web/internal pages are always excluded.</p>
       </div>
+    </details>
+
+    <section class="summary-panel" aria-labelledby="stats-title">
+      <div class="section-title-row">
+        <h2 id="stats-title">Workspace overview</h2>
+        <span id="summary-workspace-name" class="section-chip">Current</span>
+      </div>
+      <div class="summary">
+        <div class="metric"><span id="workspace-tab-count" class="metric-value">—</span><span class="metric-label">Total tabs</span></div>
+        <div class="metric"><span id="eligible-count" class="metric-value">—</span><span class="metric-label">Eligible</span></div>
+        <div class="metric"><span id="skipped-count" class="metric-value">—</span><span class="metric-label">Skipped</span></div>
+      </div>
+      <button id="unload-all-button" class="primary-button" type="button" disabled>Unload eligible tabs</button>
+      <section id="bulk-confirmation" class="confirmation" hidden aria-live="polite">
+        <p id="bulk-confirmation-text"></p>
+        <div class="confirmation-actions">
+          <button id="cancel-bulk-button" class="secondary-button" type="button">Cancel</button>
+          <button id="confirm-bulk-button" class="danger-button" type="button">Confirm bulk unload</button>
+        </div>
+      </section>
     </section>
 
     <section class="status-panel" aria-label="Extension status">
@@ -57,8 +74,21 @@
       <p class="footer-note">Local-only · No website scripts · No network requests</p>
     </section>
 
-    <section class="tab-section" aria-labelledby="tabs-title">
-      <div class="section-heading"><h2 id="tabs-title">Current workspace</h2><span class="hint">Tabs stay visible after discard</span></div>
+    <section class="panel tab-section" aria-labelledby="tabs-title">
+      <div class="section-title-row tabs-heading">
+        <div>
+          <h2 id="tabs-title">Tabs in selected workspace</h2>
+          <p id="tab-section-note" class="panel-subtitle">Each tab is checked before unloading.</p>
+        </div>
+        <label class="sort-control">
+          <span>Sort</span>
+          <select id="tab-sort-select" class="sort-select" aria-label="Sort tabs">
+            <option value="eligible-first">Eligible first</option>
+            <option value="eligible-last">Eligible last</option>
+            <option value="tab-order">Tab order</option>
+          </select>
+        </label>
+      </div>
       <div id="tab-list" class="tab-list" aria-live="polite"><p class="empty-state">Loading tabs…</p></div>
     </section>
   </main>
