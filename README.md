@@ -8,14 +8,15 @@ A small, local-only Manifest V3 extension for reviewing tabs in Opera GX workspa
 
 - **Visible diagnostics:** If workspace detection fails, the popup clears stale tab counts/actions, shows the underlying error, and exposes a retry control. It never leaves an old bulk-unload count visible beside an error.
 
-- **Workspace selector:** The popup defaults to the current workspace each time it opens, but you can select another detected workspace without switching to it in Opera GX.
+- **Workspace selector:** The popup defaults to the current workspace each time it opens. Other detected workspaces can be inspected, but unloading from them is temporarily blocked until Opera GX's cross-workspace discard behavior is understood.
 - **Workspace-specific targeting:** Tabs are selected by Opera's `workspaceId`, not by window ID.
 - **Immediate individual unloading:** Clicking **Unload tab** runs the safety preflight again and discards that tab without a separate confirmation.
-- **Confirmed bulk unloading:** Review and confirm the batch. Every tab is checked again immediately before the discard attempt.
+- **Confirmed bulk unloading:** Review and confirm the batch. Every tab is checked again immediately before the discard attempt. Bulk unloading is blocked if the active workspace changes or is different from the selected workspace.
 - **Configurable preferences:** Skip pinned tabs, audible tabs, and tabs marked `autoDiscardable: false`. Preference buttons show green ON and red OFF states.
 - **Persistent sorting:** Choose **Eligible first**, **Eligible last**, or **Tab order**. The choice is saved locally and restored the next time the popup opens.
 - **Conservative scope checks:** Tabs without a verifiable workspace identity are not guessed into a workspace. If any tab has unknown workspace identity, bulk unloading is blocked.
 - **Readable popup:** One overall scroll area, separated sections, larger typography, status above the tab list, and collapsible Preferences.
+- **Local diagnostic log:** Keeps the last 100 unload-related events in extension storage, including timestamp, tab/window/workspace IDs and browser-visible state, but no tab titles or URLs. The collapsed Diagnostics section exports the log as JSON or clears it.
 - No content scripts, website host permissions, remote code, external services, telemetry, analytics, or runtime dependencies.
 
 > **State limitation:** Extension APIs cannot reliably detect every kind of unsaved state inside arbitrary websites. The preflight checks browser-visible metadata and conservative exclusions, but cannot guarantee that application state held only in a page's memory will be restored after discard. Save important work before discarding tabs.
@@ -31,7 +32,7 @@ The extension always skips:
 
 By default it also skips pinned tabs, audible tabs, and tabs marked non-auto-discardable; these three protections can be switched off in Preferences.
 
-Individual unloads do not show a confirmation dialog, as requested, but they always revalidate tab eligibility before calling `chrome.tabs.discard()`. Bulk unloads require confirmation and compare the eligible set against the reviewed set before processing sequentially. The extension also verifies the browser's reported discard state after each attempt.
+Individual unloads in the active workspace do not show a confirmation dialog, as requested, but they always revalidate tab eligibility before calling `chrome.tabs.discard()`. Tabs in other workspaces are read-only in the popup for now, because discarding from an inactive GX workspace has coincided with full-browser exits in testing. The extension does not currently claim this is a confirmed Opera bug; this is a protective workaround pending more diagnostics. Bulk unloads require confirmation and compare the eligible set against the reviewed set before processing sequentially. The extension also verifies the browser's reported discard state after each attempt.
 
 ## Compatibility notes
 
@@ -60,6 +61,8 @@ The suite checks JavaScript syntax and the pure tab eligibility/sorting policy. 
 ## Manual integration test checklist
 
 - Verify workspace IDs are returned for tabs in all open browser windows.
+- Confirm other-workspace tabs can be inspected but their unload controls are disabled.
+- In the active workspace, test a regular eligible tab and then export the local Diagnostics JSON if GX does not confirm discard.
 - Create two GX workspaces and ensure the selector can target either without switching the browser's active workspace.
 - Confirm opening the popup defaults the workspace selector to the current workspace.
 - Confirm eligible-first, eligible-last and tab-order sorting persist when the popup is reopened.
