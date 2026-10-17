@@ -83,7 +83,35 @@
     return { eligible: reasons.length === 0, reasons };
   }
 
-  const api = { DEFAULT_PREFERENCES, normalizeWorkspaceId, getIneligibilityReasons, evaluateTab };
+  function sortEvaluatedTabs(items, mode) {
+    const indexedItems = items.map((item, index) => ({
+      item,
+      originalIndex: Number.isInteger(item.index) ? item.index : index
+    }));
+
+    indexedItems.sort((a, b) => {
+      const aEligible = a.item.evaluation && a.item.evaluation.eligible === true;
+      const bEligible = b.item.evaluation && b.item.evaluation.eligible === true;
+
+      if (mode === "eligible-first" && aEligible !== bEligible) {
+        return aEligible ? -1 : 1;
+      }
+      if (mode === "eligible-last" && aEligible !== bEligible) {
+        return aEligible ? 1 : -1;
+      }
+      return a.originalIndex - b.originalIndex;
+    });
+
+    return indexedItems.map((entry) => entry.item);
+  }
+
+  const api = {
+    DEFAULT_PREFERENCES,
+    normalizeWorkspaceId,
+    getIneligibilityReasons,
+    evaluateTab,
+    sortEvaluatedTabs
+  };
   root.TabPolicy = api;
   if (typeof module !== "undefined" && module.exports) module.exports = api;
 })(typeof globalThis !== "undefined" ? globalThis : this);
