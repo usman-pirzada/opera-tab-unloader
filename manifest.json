@@ -1,0 +1,11 @@
+{
+  "manifest_version": 3,
+  "name": "Opera GX Workspace Tab Unloader",
+  "version": "0.1.0",
+  "description": "Review and safely discard eligible tabs in the active Opera GX workspace.",
+  "permissions": ["tabs", "storage"],
+  "action": {
+    "default_title": "Workspace Tab Unloader",
+    "default_popup": "popup.html"
+  }
+}
