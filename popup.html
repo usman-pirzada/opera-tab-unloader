@@ -17,16 +17,20 @@
       <button id="refresh-button" class="icon-button" type="button" title="Refresh tab list" aria-label="Refresh tab list">↻</button>
     </header>
 
-    <section class="notice" role="note">
-      <strong>State-safety limitation</strong>
-      <p>Browser APIs cannot reliably detect every unsaved state inside websites. Discarding reloads a page later and may lose unsaved app-only data. Review the candidates before confirming.</p>
-    </section>
-
     <section class="preferences" aria-labelledby="preferences-title">
       <h2 id="preferences-title">Safety checks</h2>
-      <label class="preference"><input type="checkbox" data-pref="skipPinnedTabs" checked> <span>Skip pinned tabs</span></label>
-      <label class="preference"><input type="checkbox" data-pref="skipAudibleTabs" checked> <span>Skip tabs currently audible</span></label>
-      <label class="preference"><input type="checkbox" data-pref="skipNonAutoDiscardableTabs" checked> <span>Skip tabs marked non-auto-discardable</span></label>
+      <div class="preference">
+        <span id="pref-pinned-label">Skip pinned tabs</span>
+        <button type="button" class="preference-toggle is-on" data-pref="skipPinnedTabs" aria-labelledby="pref-pinned-label" aria-pressed="true">ON</button>
+      </div>
+      <div class="preference">
+        <span id="pref-audible-label">Skip tabs currently audible</span>
+        <button type="button" class="preference-toggle is-on" data-pref="skipAudibleTabs" aria-labelledby="pref-audible-label" aria-pressed="true">ON</button>
+      </div>
+      <div class="preference">
+        <span id="pref-auto-discard-label">Skip tabs marked non-auto-discardable</span>
+        <button type="button" class="preference-toggle is-on" data-pref="skipNonAutoDiscardableTabs" aria-labelledby="pref-auto-discard-label" aria-pressed="true">ON</button>
+      </div>
       <p class="hint">Active tabs, loading tabs, already-discarded tabs, private tabs and non-web/internal pages are always excluded.</p>
     </section>
 
@@ -48,15 +52,15 @@
       </div>
     </section>
 
+    <section class="status-panel" aria-label="Extension status">
+      <p id="status" role="status" aria-live="polite">Checking browser capabilities…</p>
+      <p class="footer-note">Local-only · No website scripts · No network requests</p>
+    </section>
+
     <section class="tab-section" aria-labelledby="tabs-title">
       <div class="section-heading"><h2 id="tabs-title">Current workspace</h2><span class="hint">Tabs stay visible after discard</span></div>
       <div id="tab-list" class="tab-list" aria-live="polite"><p class="empty-state">Loading tabs…</p></div>
     </section>
-
-    <footer>
-      <p id="status" role="status" aria-live="polite">Checking browser capabilities…</p>
-      <p class="footer-note">Local-only · No website scripts · No network requests</p>
-    </footer>
   </main>
   <script src="src/tab-policy.js"></script>
   <script src="src/popup.js"></script>
