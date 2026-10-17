@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workspace Tab Unloader</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <main class="app">
+    <header class="header">
+      <div>
+        <p class="eyebrow">OPERA GX</p>
+        <h1>Workspace Tab Unloader</h1>
+        <p id="workspace-label" class="muted">Detecting active workspace…</p>
+      </div>
+      <button id="refresh-button" class="icon-button" type="button" title="Refresh tab list" aria-label="Refresh tab list">↻</button>
+    </header>
+
+    <section class="notice" role="note">
+      <strong>State-safety limitation</strong>
+      <p>Browser APIs cannot reliably detect every unsaved state inside websites. Discarding reloads a page later and may lose unsaved app-only data. Review the candidates before confirming.</p>
+    </section>
+
+    <section class="preferences" aria-labelledby="preferences-title">
+      <h2 id="preferences-title">Safety checks</h2>
+      <label class="preference"><input type="checkbox" data-pref="skipPinnedTabs" checked> <span>Skip pinned tabs</span></label>
+      <label class="preference"><input type="checkbox" data-pref="skipAudibleTabs" checked> <span>Skip tabs currently audible</span></label>
+      <label class="preference"><input type="checkbox" data-pref="skipNonAutoDiscardableTabs" checked> <span>Skip tabs marked non-auto-discardable</span></label>
+      <p class="hint">Active tabs, loading tabs, already-discarded tabs, private tabs and non-web/internal pages are always excluded.</p>
+    </section>
+
+    <section class="summary" aria-label="Workspace tab summary">
+      <div class="metric"><span id="workspace-tab-count" class="metric-value">—</span><span class="metric-label">Tabs in workspace</span></div>
+      <div class="metric"><span id="eligible-count" class="metric-value">—</span><span class="metric-label">Passed checks</span></div>
+      <div class="metric"><span id="skipped-count" class="metric-value">—</span><span class="metric-label">Skipped</span></div>
+    </section>
+
+    <div class="bulk-row">
+      <button id="review-all-button" class="primary-button" type="button" disabled>Review eligible tabs</button>
+    </div>
+
+    <section id="bulk-confirmation" class="confirmation" hidden aria-live="polite">
+      <p id="bulk-confirmation-text"></p>
+      <div class="confirmation-actions">
+        <button id="cancel-bulk-button" class="secondary-button" type="button">Cancel</button>
+        <button id="confirm-bulk-button" class="danger-button" type="button">Confirm unload</button>
+      </div>
+    </section>
+
+    <section class="tab-section" aria-labelledby="tabs-title">
+      <div class="section-heading"><h2 id="tabs-title">Current workspace</h2><span class="hint">Tabs stay visible after discard</span></div>
+      <div id="tab-list" class="tab-list" aria-live="polite"><p class="empty-state">Loading tabs…</p></div>
+    </section>
+
+    <footer>
+      <p id="status" role="status" aria-live="polite">Checking browser capabilities…</p>
+      <p class="footer-note">Local-only · No website scripts · No network requests</p>
+    </footer>
+  </main>
+  <script src="src/tab-policy.js"></script>
+  <script src="src/popup.js"></script>
+</body>
+</html>
