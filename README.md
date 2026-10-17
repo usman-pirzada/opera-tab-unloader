@@ -4,6 +4,8 @@ A small, local-only Manifest V3 extension for reviewing tabs in Opera GX workspa
 
 ## Features
 
+- **Workspace detection fix (v0.1.4):** The unknown-workspace guard now checks the snapshot property directly. A mismatched helper name previously raised a `ReferenceError` during refresh before the normal workspace status could render. A regression test now guards against that exact typo.
+
 - **Visible diagnostics:** If workspace detection fails, the popup clears stale tab counts/actions, shows the underlying error, and exposes a retry control. It never leaves an old bulk-unload count visible beside an error.
 
 - **Workspace selector:** The popup defaults to the current workspace each time it opens, but you can select another detected workspace without switching to it in Opera GX.
