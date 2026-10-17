@@ -32,6 +32,9 @@
   let pendingBulk = null;
   let busy = false;
 
+  const DIAGNOSTIC_KEY = "diagnosticEvents";
+  const MAX_DIAGNOSTIC_EVENTS = 100;
+
   function setStatus(message) {
     ui.status.textContent = message;
   }
@@ -54,6 +57,41 @@
     return element;
   }
 
+  async function recordDiagnostic(event) {
+    const record = {
+      timestamp: new Date().toISOString(),
+      version: chrome.runtime.getManifest().version,
+      ...event
+    };
+    try {
+      const stored = await chrome.storage.local.get(DIAGNOSTIC_KEY);
+      const events = Array.isArray(stored[DIAGNOSTIC_KEY]) ? stored[DIAGNOSTIC_KEY] : [];
+      events.push(record);
+      await chrome.storage.local.set({
+        [DIAGNOSTIC_KEY]: events.slice(-MAX_DIAGNOSTIC_EVENTS)
+      });
+      return true;
+    } catch (_error) {
+      // Diagnostics are best-effort and must not change the tab safety decision.
+      return false;
+    }
+  }
+
+  function diagnosticTabState(tab) {
+    return {
+      tabId: Number.isInteger(tab.id) ? tab.id : null,
+      windowId: Number.isInteger(tab.windowId) ? tab.windowId : null,
+      workspaceId: normalizeId(tab.workspaceId),
+      active: typeof tab.active === "boolean" ? tab.active : null,
+      discarded: typeof tab.discarded === "boolean" ? tab.discarded : null,
+      status: typeof tab.status === "string" ? tab.status : null,
+      pinned: typeof tab.pinned === "boolean" ? tab.pinned : null,
+      audible: typeof tab.audible === "boolean" ? tab.audible : null,
+      autoDiscardable: typeof tab.autoDiscardable === "boolean" ? tab.autoDiscardable : null,
+      incognito: typeof tab.incognito === "boolean" ? tab.incognito : null
+    };
+  }
+
   function displayWorkspaceName(workspace) {
     return workspace && workspace.name ? workspace.name : "Workspace " + (workspace ? workspace.id : "");
   }
@@ -65,7 +103,9 @@
     ui.retry.disabled = busy;
     ui.retry.hidden = Boolean(workspaceData);
     ui.unloadAll.disabled = busy || !snapshot ||
-      snapshot.unknownWorkspaceCount > 0 || snapshot.eligibleTabs.length === 0;
+      snapshot.unknownWorkspaceCount > 0 ||
+      !policy.isSameWorkspace(snapshot.workspace.id, snapshot.currentWorkspaceId) ||
+      snapshot.eligibleTabs.length === 0;
     ui.tabList.querySelectorAll("button").forEach((button) => {
       button.disabled = busy;
     });
@@ -218,12 +258,17 @@
       const actions = document.createElement("div");
       actions.className = "tab-actions";
       const button = document.createElement("button");
+      const workspaceIsCurrent = policy.isSameWorkspace(workspaceId, snapshot.currentWorkspaceId);
       button.type = "button";
       button.className = "tab-action-button";
-      button.textContent = "Unload tab";
-      button.setAttribute("aria-label", "Unload tab: " + (tab.title || "Untitled tab"));
-      button.disabled = busy;
-      button.addEventListener("click", () => handleIndividual(tab.id, workspaceId));
+      button.textContent = workspaceIsCurrent ? "Unload tab" : "Switch workspace to unload";
+      button.setAttribute("aria-label", workspaceIsCurrent
+        ? "Unload tab: " + (tab.title || "Untitled tab")
+        : "Switch to this workspace in Opera GX before unloading " + (tab.title || "this tab"));
+      button.disabled = busy || !workspaceIsCurrent;
+      if (workspaceIsCurrent) {
+        button.addEventListener("click", () => handleIndividual(tab.id, workspaceId));
+      }
       actions.appendChild(button);
       row.appendChild(actions);
     }
@@ -238,8 +283,8 @@
     const isCurrentWorkspace = sameId(nextSnapshot.workspace.id, data.currentWorkspaceId);
     ui.workspaceLabel.textContent = "Managing " + displayWorkspaceName(nextSnapshot.workspace);
     ui.workspaceScopeNote.textContent = isCurrentWorkspace
-      ? "Default selection · Current workspace"
-      : "Selected workspace · Browser workspace switching is not required.";
+      ? "Current workspace · Unloading enabled"
+      : "Preview only · Switch to this workspace in Opera GX to enable unloading.";
     ui.summaryWorkspaceName.textContent = isCurrentWorkspace ? "Current" : "Selected";
     ui.tabSectionTitle.textContent = "Tabs in " + displayWorkspaceName(nextSnapshot.workspace);
     ui.tabSectionNote.textContent = "Each tab is checked again before it is unloaded.";
@@ -265,7 +310,9 @@
 
     ui.unloadAll.textContent = nextSnapshot.unknownWorkspaceCount > 0
       ? "Bulk unload blocked: unknown workspace IDs"
-      : "Unload " + nextSnapshot.eligibleTabs.length + " eligible tab" + (nextSnapshot.eligibleTabs.length === 1 ? "" : "s");
+      : !policy.isSameWorkspace(nextSnapshot.workspace.id, nextSnapshot.currentWorkspaceId)
+        ? "Switch to this workspace to unload tabs"
+        : "Unload " + nextSnapshot.eligibleTabs.length + " eligible tab" + (nextSnapshot.eligibleTabs.length === 1 ? "" : "s");
     updateControls();
   }
 
@@ -329,15 +376,53 @@
   async function inspectTab(tabId, expectedWorkspaceId, requireCompleteMap) {
     const data = await readWorkspaceData();
     if (!data.workspaces.some((item) => sameId(item.id, expectedWorkspaceId))) {
+      await recordDiagnostic({
+        event: "preflight-failed",
+        action: requireCompleteMap ? "bulk-discard" : "individual-discard",
+        tabId,
+        targetWorkspaceId: normalizeId(expectedWorkspaceId),
+        activeWorkspaceId: data.currentWorkspaceId,
+        reason: "target-workspace-not-found"
+      });
       throw new Error("The selected workspace no longer exists. No tab was unloaded.");
     }
+    if (!policy.isSameWorkspace(expectedWorkspaceId, data.currentWorkspaceId)) {
+      await recordDiagnostic({
+        event: "blocked-cross-workspace",
+        action: requireCompleteMap ? "bulk-discard" : "individual-discard",
+        tabId,
+        targetWorkspaceId: normalizeId(expectedWorkspaceId),
+        activeWorkspaceId: data.currentWorkspaceId,
+        reason: "Cross-workspace unloading is temporarily disabled while Opera GX stability is investigated."
+      });
+      throw new Error("Cross-workspace unloading is temporarily disabled because Opera GX has crashed during this operation. Switch to the target workspace in GX, then retry.");
+    }
     if (requireCompleteMap && data.unknownWorkspaceCount > 0) {
+      await recordDiagnostic({
+        event: "preflight-failed",
+        action: "bulk-discard",
+        tabId,
+        targetWorkspaceId: normalizeId(expectedWorkspaceId),
+        activeWorkspaceId: data.currentWorkspaceId,
+        reason: "workspace-identity-ambiguous",
+        unknownWorkspaceCount: data.unknownWorkspaceCount
+      });
       throw new Error("Workspace identity became ambiguous during bulk unloading. Remaining tabs were not attempted.");
     }
 
     const tab = await chrome.tabs.get(tabId);
     const evaluation = policy.evaluateTab(tab, expectedWorkspaceId, preferences);
-    return { tab, evaluation };
+    if (!evaluation.eligible) {
+      await recordDiagnostic({
+        event: "preflight-skipped",
+        action: requireCompleteMap ? "bulk-discard" : "individual-discard",
+        ...diagnosticTabState(tab),
+        targetWorkspaceId: normalizeId(expectedWorkspaceId),
+        activeWorkspaceId: data.currentWorkspaceId,
+        reasons: evaluation.reasons
+      });
+    }
+    return { tab, evaluation, data };
   }
 
   async function discardOne(tabId, expectedWorkspaceId, requireCompleteMap) {
@@ -351,13 +436,51 @@
       };
     }
 
-    await chrome.tabs.discard(tabId);
+    // Persist this event before calling the browser. If GX exits inside the native
+    // discard path, this is the last durable event we expect to have.
+    await recordDiagnostic({
+      event: "discard-requested",
+      action: requireCompleteMap ? "bulk-discard" : "individual-discard",
+      ...diagnosticTabState(tab),
+      targetWorkspaceId: normalizeId(expectedWorkspaceId),
+      activeWorkspaceId: result.data.currentWorkspaceId
+    });
+
+    let apiResult;
+    try {
+      apiResult = await chrome.tabs.discard(tabId);
+    } catch (error) {
+      await recordDiagnostic({
+        event: "discard-api-rejected",
+        action: requireCompleteMap ? "bulk-discard" : "individual-discard",
+        tabId,
+        windowId: tab.windowId ?? null,
+        targetWorkspaceId: normalizeId(expectedWorkspaceId),
+        activeWorkspaceId: result.data.currentWorkspaceId,
+        errorName: error instanceof Error ? error.name : "UnknownError",
+        errorMessage: error instanceof Error ? error.message : String(error)
+      });
+      throw error;
+    }
+
     const after = await chrome.tabs.get(tabId);
+    await recordDiagnostic({
+      event: after.discarded === true ? "discard-confirmed" : "discard-not-confirmed",
+      action: requireCompleteMap ? "bulk-discard" : "individual-discard",
+      ...diagnosticTabState(after),
+      targetWorkspaceId: normalizeId(expectedWorkspaceId),
+      activeWorkspaceId: result.data.currentWorkspaceId,
+      apiReturnedTab: Boolean(apiResult && typeof apiResult === "object"),
+      apiReturnedDiscarded: apiResult && typeof apiResult.discarded === "boolean"
+        ? apiResult.discarded
+        : null
+    });
+
     if (after.discarded !== true) {
       return {
         ok: false,
         skipped: false,
-        message: (tab.title || "Tab") + ": Opera GX did not confirm that it was discarded."
+        message: (tab.title || "Tab") + ": the discard request returned, but Opera GX still reports this tab as loaded. The local diagnostic log records the before/after state."
       };
     }
     return { ok: true, skipped: false, message: (tab.title || "Tab") + " was unloaded." };
@@ -394,6 +517,13 @@
       }
       const latest = createSnapshot(data, selectedWorkspaceId);
       render(latest, data);
+
+      if (!policy.isSameWorkspace(latest.workspace.id, latest.currentWorkspaceId)) {
+        clearBulkConfirmation();
+        setStatus("Bulk unloading another workspace is temporarily disabled. Switch to “" +
+          latest.workspace.name + "” in Opera GX first.");
+        return;
+      }
 
       if (latest.unknownWorkspaceCount > 0) {
         clearBulkConfirmation();
@@ -540,6 +670,51 @@
 
   ui.retry.addEventListener("click", () => refresh());
   ui.unloadAll.addEventListener("click", beginBulkReview);
+
+  $("#export-diagnostics-button").addEventListener("click", async () => {
+    const status = $("#diagnostics-status");
+    try {
+      const stored = await chrome.storage.local.get(DIAGNOSTIC_KEY);
+      const events = Array.isArray(stored[DIAGNOSTIC_KEY]) ? stored[DIAGNOSTIC_KEY] : [];
+      const payload = {
+        extension: chrome.runtime.getManifest().name,
+        version: chrome.runtime.getManifest().version,
+        exportedAt: new Date().toISOString(),
+        events
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "opera-tab-unloader-diagnostics.json";
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1500);
+      status.textContent = "Exported " + events.length + " local event(s). The file contains no tab titles or URLs.";
+    } catch (_error) {
+      status.textContent = "Could not export diagnostics. The log remains stored locally.";
+    }
+  });
+
+  $("#clear-diagnostics-button").addEventListener("click", async () => {
+    const status = $("#diagnostics-status");
+    try {
+      await chrome.storage.local.remove(DIAGNOSTIC_KEY);
+      status.textContent = "Local diagnostic log cleared.";
+    } catch (_error) {
+      status.textContent = "Could not clear the local diagnostic log.";
+    }
+  });
+
+  (async function updateDiagnosticCount() {
+    try {
+      const stored = await chrome.storage.local.get(DIAGNOSTIC_KEY);
+      const count = Array.isArray(stored[DIAGNOSTIC_KEY]) ? stored[DIAGNOSTIC_KEY].length : 0;
+      $("#diagnostics-status").textContent = count + " event(s) stored locally; maximum " +
+        MAX_DIAGNOSTIC_EVENTS + ".";
+    } catch (_error) {
+      $("#diagnostics-status").textContent = "Local diagnostic log is unavailable.";
+    }
+  })();
   ui.cancelBulk.addEventListener("click", () => {
     clearBulkConfirmation();
     setStatus("Bulk unload cancelled. No tabs were unloaded.");
