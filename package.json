@@ -1,8 +1,8 @@
 {
   "name": "opera-gx-workspace-tab-unloader",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "private": true,
-  "description": "A local-only Manifest V3 extension for reviewing and discarding eligible tabs in the active Opera GX workspace.",
+  "description": "A local-only Manifest V3 extension for inspecting Opera GX workspaces and safely discarding eligible tabs in the active workspace.",
   "scripts": {
     "test": "node --check src/popup.js && node --check src/tab-policy.js && node --test"
   },
