@@ -54,6 +54,16 @@
     ui.tabList.querySelectorAll("button").forEach((button) => {
       button.disabled = busy;
     });
+    document.querySelectorAll(".preference-toggle").forEach((button) => {
+      button.disabled = busy;
+    });
+  }
+
+  function renderPreferenceToggle(button, isOn) {
+    button.classList.toggle("is-on", isOn);
+    button.classList.toggle("is-off", !isOn);
+    button.textContent = isOn ? "ON" : "OFF";
+    button.setAttribute("aria-pressed", String(isOn));
   }
 
   async function readActiveWorkspace() {
@@ -383,14 +393,18 @@
       setStatus("Preferences could not be loaded. Conservative defaults are active for this session.");
     }
 
-    document.querySelectorAll("input[data-pref]").forEach((input) => {
-      input.checked = preferences[input.dataset.pref] === true;
-      input.addEventListener("change", async () => {
-        const key = input.dataset.pref;
-        preferences = { ...preferences, [key]: input.checked };
+    document.querySelectorAll(".preference-toggle[data-pref]").forEach((button) => {
+      const key = button.dataset.pref;
+      renderPreferenceToggle(button, preferences[key] === true);
+      button.addEventListener("click", async () => {
+        if (busy) return;
+        const enabled = !(preferences[key] === true);
+        preferences = { ...preferences, [key]: enabled };
+        renderPreferenceToggle(button, enabled);
         clearConfirmation();
+        updateControls();
         try {
-          await chrome.storage.local.set({ [key]: input.checked });
+          await chrome.storage.local.set({ [key]: enabled });
         } catch (_error) {
           setStatus("Could not save the preference. It is active for this popup session only.");
         }
