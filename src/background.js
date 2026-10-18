@@ -553,11 +553,282 @@
       });
     }
 
+    async function runAdaptiveScan(run, preferences, settings) {
+      const prefs = tabPolicy.normalizePreferences(preferences);
+      const hardDeadlineAt = run.deadlineAt;
+      const monitoringStartedAt = run.startedAt;
+      const configuredWindowMs = Math.max(0, settings.scanWindowMs);
+      const discoveryEndAt = Math.min(hardDeadlineAt, monitoringStartedAt + configuredWindowMs);
+      let monitoringEndAt = discoveryEndAt;
+      let startupGraceResolved = run.kind !== "startup";
+      let finalContext = null;
+      let finalContextError = null;
+      const attemptedIds = new Set();
+      const countedSkippedIds = new Set();
+      const summary = {
+        state: "completed",
+        unloaded: 0,
+        skipped: 0,
+        failed: 0,
+        aborted: false,
+        remainingEligible: null,
+        loadingProtectedRemaining: 0,
+        messages: []
+      };
+
+      run.collecting = true;
+      run.phase = "monitoring";
+
+      while (!run.cancelled && Date.now() < hardDeadlineAt) {
+        let context;
+        try {
+          context = await getWorkspaceContext(hardDeadlineAt);
+        } catch (error) {
+          summary.state = error && error.operationTimedOut ? "timeout" : "aborted";
+          summary.aborted = true;
+          summary.messages.push(error && error.operationTimedOut
+            ? "The overall deadline was reached while refreshing the tab snapshot."
+            : "Could not refresh tab state: " + errText(error));
+          break;
+        }
+
+        if (context.currentWorkspaceId === null) {
+          summary.state = "aborted";
+          summary.aborted = true;
+          summary.messages.push("The current workspace could not be verified. Remaining tabs were not attempted.");
+          break;
+        }
+        if (!sameWorkspace(run.workspaceId, context.currentWorkspaceId)) {
+          cancelRun(run, run.kind === "startup"
+            ? "Workspace changed during startup auto-unload. Remaining tabs were not attempted."
+            : "Workspace changed during adaptive bulk unloading. Remaining tabs were not attempted.");
+          summary.state = "cancelled";
+          summary.aborted = true;
+          summary.messages.push(run.cancelReason);
+          break;
+        }
+        if (context.unknownWorkspaceCount > 0) {
+          summary.state = "aborted";
+          summary.aborted = true;
+          summary.messages.push("Tab workspace identity is ambiguous. Remaining tabs were not attempted.");
+          break;
+        }
+
+        context.allTabs.forEach(function (tab) { addCandidate(run, tab); });
+
+        // Startup watches the full configured restoration window while unloading
+        // eligible tabs along the way. If protected tabs are still loading when
+        // that window ends, extend monitoring by a bounded grace period.
+        if (run.kind === "startup" && !startupGraceResolved && Date.now() >= discoveryEndAt) {
+          startupGraceResolved = true;
+          const protectedLoadingExists = context.allTabs.some(function (tab) {
+            return sameWorkspace(tab.workspaceId, run.workspaceId) &&
+              tab.status === "loading" && prefs.skipLoadingTabs === true;
+          });
+          if (protectedLoadingExists && settings.loadingGraceMs > 0) {
+            monitoringEndAt = Math.min(hardDeadlineAt, discoveryEndAt + settings.loadingGraceMs);
+          } else {
+            monitoringEndAt = discoveryEndAt;
+          }
+        }
+
+        if (Date.now() >= monitoringEndAt) break;
+
+        const candidates = context.allTabs.filter(function (tab) {
+          return Number.isInteger(tab.id) &&
+            sameWorkspace(tab.workspaceId, run.workspaceId) &&
+            !attemptedIds.has(tab.id) &&
+            tabPolicy.evaluateTab(tab, run.workspaceId, prefs).eligible;
+        }).sort(function (a, b) { return a.id - b.id; });
+
+        let issuedAttemptThisCycle = false;
+        for (const candidate of candidates) {
+          if (run.cancelled) break;
+          if (Date.now() >= hardDeadlineAt) {
+            summary.state = "timeout";
+            summary.aborted = true;
+            summary.messages.push("The overall deadline was reached. Remaining tabs were not attempted.");
+            break;
+          }
+          if (Date.now() >= monitoringEndAt) break;
+
+          const outcome = await inspectAndDiscard(
+            candidate.id,
+            run.workspaceId,
+            prefs,
+            true,
+            run,
+            { deadlineAt: hardDeadlineAt }
+          );
+
+          if (outcome.attempted === true) {
+            attemptedIds.add(candidate.id);
+            issuedAttemptThisCycle = true;
+          }
+          if (outcome.state === "success") {
+            summary.unloaded += 1;
+          } else if (outcome.state === "skipped") {
+            if (!countedSkippedIds.has(candidate.id)) {
+              countedSkippedIds.add(candidate.id);
+              summary.skipped += 1;
+            }
+          } else if (outcome.state === "failure") {
+            summary.failed += 1;
+          } else {
+            if (outcome.state === "uncertain") summary.failed += 1;
+            summary.state = run.cancelled ? "cancelled" :
+              (outcome.state === "timeout" ? "timeout" : "aborted");
+            summary.aborted = true;
+            summary.messages.push(outcome.message || "The operation stopped before the remaining tabs were attempted.");
+            break;
+          }
+        }
+
+        if (summary.aborted || run.cancelled || Date.now() >= hardDeadlineAt) break;
+        if (issuedAttemptThisCycle) {
+          // Immediately resnapshot after any real discard attempt. This admits
+          // newly eligible tabs and never relies on a frozen candidate count.
+          continue;
+        }
+        if (Date.now() >= monitoringEndAt) break;
+
+        const generation = run.updateGeneration;
+        const waitMs = Math.max(1, Math.min(
+          prefs.startupQuietPeriodSeconds * 1000,
+          monitoringEndAt - Date.now(),
+          20000
+        ));
+        // Tab create/update/remove/replace events wake the scan early. If Opera
+        // emits no event, the quiet interval performs another fresh snapshot.
+        await waitForSignal(run, waitMs, generation);
+      }
+
+      if (run.cancelled && !summary.aborted) {
+        summary.state = "cancelled";
+        summary.aborted = true;
+        summary.messages.push(run.cancelReason || "The current workspace changed. Remaining tabs were not attempted.");
+      } else if (Date.now() >= hardDeadlineAt && !summary.aborted) {
+        summary.state = "timeout";
+        summary.aborted = true;
+        summary.messages.push("The overall deadline was reached. No new unload attempts were started.");
+      }
+
+      run.collecting = false;
+      run.phase = "finished";
+
+      // Final reporting uses a new snapshot. The remaining count is informational:
+      // it never triggers more work after the monitoring window has ended.
+      if (Date.now() < hardDeadlineAt) {
+        try {
+          finalContext = await getWorkspaceContext(hardDeadlineAt);
+          if (finalContext.currentWorkspaceId === null ||
+              !sameWorkspace(run.workspaceId, finalContext.currentWorkspaceId)) {
+            cancelRun(run, run.kind === "startup"
+              ? "Workspace changed during startup auto-unload. Remaining tabs were not attempted."
+              : "Workspace changed during adaptive bulk unloading. Remaining tabs were not attempted.");
+            summary.state = "cancelled";
+            summary.aborted = true;
+            if (!summary.messages.includes(run.cancelReason)) summary.messages.push(run.cancelReason);
+          } else if (finalContext.unknownWorkspaceCount > 0) {
+            summary.remainingEligible = null;
+            summary.state = summary.state === "completed" ? "aborted" : summary.state;
+            summary.aborted = true;
+            summary.messages.push("Could not count remaining eligible tabs because some tabs have unknown workspace identity.");
+          } else {
+            const workspaceTabs = finalContext.allTabs.filter(function (tab) {
+              return sameWorkspace(tab.workspaceId, run.workspaceId);
+            });
+            summary.remainingEligible = workspaceTabs.filter(function (tab) {
+              return tabPolicy.evaluateTab(tab, run.workspaceId, prefs).eligible;
+            }).length;
+            summary.loadingProtectedRemaining = workspaceTabs.filter(function (tab) {
+              return prefs.skipLoadingTabs && tab.status === "loading";
+            }).length;
+          }
+        } catch (error) {
+          finalContextError = error;
+        }
+      }
+
+      const pieces = [];
+      pieces.push((run.kind === "startup" ? "Startup auto-unload" : "Adaptive bulk unload") +
+        (summary.state === "completed" ? " finished: " : " stopped: ") +
+        summary.unloaded + " unloaded.");
+      if (Number.isInteger(summary.remainingEligible)) {
+        if (summary.remainingEligible > 0) {
+          pieces.push(summary.remainingEligible + " currently eligible tab" +
+            (summary.remainingEligible === 1 ? " remains" : "s remain") +
+            "; run “Unload all eligible tabs” again to try them.");
+        } else if (summary.unloaded === 0) {
+          pieces.push("No tabs were eligible at the end of this scan. Tabs still loading or protected by your settings are not included and may become eligible later.");
+        } else {
+          pieces.push("No tabs are eligible right now. Tabs still loading or protected by your settings may become eligible later.");
+        }
+      } else {
+        pieces.push("The remaining eligible count could not be verified.");
+      }
+      if (summary.failed > 0) {
+        pieces.push(summary.failed + " tab attempt(s) failed or had an uncertain outcome.");
+      }
+      if (summary.loadingProtectedRemaining > 0) {
+        pieces.push(summary.loadingProtectedRemaining + " tab(s) are still loading and remain protected.");
+      }
+      if (summary.state === "timeout") {
+        pieces.push("The hard overall deadline stopped further attempts.");
+      }
+      if (summary.aborted && summary.messages.length) {
+        pieces.push(summary.messages.join(" "));
+      } else if (finalContextError) {
+        pieces.push("Final counts could not be refreshed: " + errText(finalContextError));
+      }
+      summary.message = pieces.join(" ");
+      return summary;
+    }
+
+    async function unloadAdaptiveMessage(message) {
+      const requestStartedAt = Date.now();
+      return withOperationLock(async function () {
+        const loaded = await loadPreferences(message.preferences);
+        const allPreferences = loaded.preferences;
+        const preferences = tabPolicy.getPolicyPreferences(allPreferences, "manual");
+        const deadlineAt = requestStartedAt + allPreferences.overallDeadlineSeconds * 1000;
+        const workspaceId = normalizeId(message.workspaceId);
+        if (workspaceId === null) {
+          return { state: "aborted", aborted: true, unloaded: 0, failed: 0, message: "The current workspace could not be verified. No tabs were unloaded." };
+        }
+        const run = {
+          id: ++startupSequence,
+          kind: "manual-adaptive",
+          workspaceId: workspaceId,
+          candidates: new Set(),
+          collecting: true,
+          phase: "monitoring",
+          cancelled: false,
+          cancelReason: "",
+          updateGeneration: 0,
+          wake: null,
+          startedAt: requestStartedAt,
+          lastActivityAt: Date.now(),
+          deadlineAt: deadlineAt
+        };
+        manualAdaptiveRun = run;
+        try {
+          return await runAdaptiveScan(run, preferences, {
+            scanWindowMs: allPreferences.adaptiveBulkScanSeconds * 1000,
+            loadingGraceMs: 0
+          });
+        } finally {
+          run.collecting = false;
+          if (manualAdaptiveRun === run) manualAdaptiveRun = null;
+        }
+      }, { indicator: true });
+    }
+
     async function unloadBatchMessage(message) {
       const requestStartedAt = Date.now();
       return withOperationLock(async function () {
         const loaded = await loadPreferences(message.preferences);
-        const preferences = loaded.preferences;
+        const preferences = tabPolicy.getPolicyPreferences(loaded.preferences, "manual");
         const deadlineAt = requestStartedAt + preferences.overallDeadlineSeconds * 1000;
         if (Date.now() >= deadlineAt) {
           return { state: "timeout", message: "The overall deadline expired before bulk review could start. No tabs were unloaded." };
@@ -935,6 +1206,16 @@
       if (!message || typeof message.type !== "string") return null;
       if (message.type === "UNLOAD_ONE") return unloadOneMessage(message);
       if (message.type === "UNLOAD_BATCH") return unloadBatchMessage(message);
+      if (message.type === "UNLOAD_ADAPTIVE") return unloadAdaptiveMessage(message);
+      if (message.type === "POPUP_OPENED") {
+        try {
+          const stored = await api.storage.local.get("operationStatus");
+          if (stored.operationStatus && stored.operationStatus.state === "success") {
+            await setActionStatus("idle", "Ready.");
+          }
+        } catch (_error) {}
+        return { state: "popup-opened" };
+      }
       if (message.type === "GET_STARTUP_STATUS") {
         try {
           const stored = await api.storage.local.get("startupStatus");
