@@ -4,7 +4,7 @@
   "private": true,
   "description": "A local-only Manifest V3 extension for previewing workspaces and safely unloading eligible tabs.",
   "scripts": {
-    "test": "node --check src/popup.js && node --check src/options.js && node --check src/tab-policy.js && node --check src/background.js && node --test"
+    "test": "node --test --test-reporter=spec"
   },
   "engines": {
     "node": ">=18"

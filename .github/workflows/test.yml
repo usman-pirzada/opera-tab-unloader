@@ -22,7 +22,8 @@ jobs:
         with:
           node-version: ${{ matrix.node-version }}
       - name: Run policy tests and syntax checks
-        run: npm test
+        shell: bash
+        run: timeout --foreground 90s npm test
 
       - name: Validate manifest JSON
         run: node -e "JSON.parse(require('node:fs').readFileSync('manifest.json', 'utf8'))"

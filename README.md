@@ -11,7 +11,7 @@ A local-only Manifest V3 extension for inspecting tabs across Opera GX workspace
 - **Honest outcome handling:** the native discard result is used when it confirms success. Fallback verification distinguishes confirmed failure from an uncertain result; an uncertain result stops the rest of a batch.
 - **Separate protection profiles:** manual unloading and startup auto-unload have independent pinned, audible, non-auto-discardable, and loading-tab protections. Existing shared settings are migrated to both profiles on upgrade. Missing pending URLs default to skipping the tab in both profiles.
 - **Dedicated Settings page:** configure all preferences with automatic saving, recommended defaults, numeric validation, custom confirmation dialogs for safety-reducing changes, and reset to defaults.
-- **Timing limits:** startup discovery (default 8 seconds), loading wait (20 seconds), quiet period (2 seconds), per-tab budget (5 seconds), and the hard overall deadline (60 seconds) are configurable in Settings. The overall deadline applies to startup and manual operations. A timed-out discard is treated as uncertain and blocks further attempts until it settles.
+- **Timing limits:** startup monitoring (default 90 seconds), extra startup grace for loading tabs (20 seconds), empty-scan interval (2 seconds), manual adaptive scan window (45 seconds), per-tab budget (5 seconds), and hard overall deadline (180 seconds) are configurable in Settings. The overall deadline applies to startup and manual operations. A timed-out discard is treated as uncertain and blocks further attempts until it settles.
 - **Optional startup auto-unload:** opt in through Settings. The extension captures the workspace current at startup, ignores ambiguous activation events during initial session restoration, and then cancels the run when the active workspace is actually observed to change.
 - **Toolbar status indicator:** no dot while idle, blinking blue during bulk/startup work, green briefly after success, and red retained after an error/cancellation. Opening the popup clears green immediately. Individual tab unloads never change the dot. The status dot is drawn only on the toolbar action icon; the Options tab's favicon uses a plain icon.
 - **Keyboard bulk unload:** use `Ctrl+Shift+U` (suggested default) to open the popup and start the selected bulk mode. Confirmation is controlled by Settings. Change the shortcut in Opera's extension-shortcuts page.
@@ -60,14 +60,14 @@ The suite checks policy rules and mocked asynchronous background operations. The
 
 ## Manual integration test checklist
 
-- Confirm the popup counts update while tabs are created, loading, completed, removed, activated, and discarded.
+- Confirm Adaptive mode keeps its confirmation open when eligibility changes, updates the count during a running scan, and stops permanently if the actual active workspace changes.
 - Confirm a burst of tab events does not leave a stale snapshot visible after newer data arrives.
 - Test the Refresh button after startup and after changing workspaces.
 - Test loading-tab protection ON and OFF, including a known HTTP(S) pending navigation, an internal pending URL, and a missing pending URL under each fallback policy.
 - Test invalid, decimal, out-of-range, and cross-setting-incompatible timing values. Confirm they are rejected without saving.
 - Confirm risky setting changes require confirmation and Reset to defaults restores the documented values.
 - Test the keyboard shortcut opens a bulk-review confirmation rather than discarding immediately.
-- Confirm icon status updates for startup and manual unloads and that disabling the indicator removes the dot.
+- Confirm the status dot is absent while idle, blinks blue during bulk/startup operations, stays green briefly after success (or disappears when the popup opens), stays red after errors until the next bulk operation, and is unchanged by individual tab unloads.
 - Test individual unloads and bulk operations where discard returns a discarded tab, returns no tab, rejects, or the tab disappears during verification.
 - Confirm an uncertain result stops the batch and is not reported as a successful unload.
 - Enable startup auto-unload; close and reopen Opera GX with a workspace containing several loading tabs.
