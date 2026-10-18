@@ -393,10 +393,9 @@
       }).catch(function (error) {
         return { active: null, error: error };
       });
-      const loaded = await loadPreferences();
-      const preferences = loaded.preferences;
-      if (!preferences.autoUnloadOnStartup) return;
-
+      // Start loading preferences concurrently, but establish the startup workspace
+      // run before waiting for storage so workspace-switch events cannot be missed.
+      const preferencesPromise = loadPreferences();
       const activeResult = await activePromise;
       if (activeResult.error) {
         await saveStartupStatus({ state: "skipped", message: "Startup auto-unload skipped because the active tab could not be read: " + errText(activeResult.error) });
@@ -428,6 +427,17 @@
       startupRun = run;
 
       try {
+        const loaded = await preferencesPromise;
+        const preferences = loaded.preferences;
+        if (!preferences.autoUnloadOnStartup) return;
+        if (run.cancelled) {
+          await saveStartupStatus({
+            state: "cancelled",
+            message: run.cancelReason + " No tabs were unloaded."
+          });
+          return;
+        }
+
         await saveStartupStatus({
           state: "running",
           message: "Startup auto-unload is checking tabs in the workspace that was current at startup."

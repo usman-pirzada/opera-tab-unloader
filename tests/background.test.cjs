@@ -301,3 +301,31 @@ test('a switch away and back in the same focused window still cancels the startu
   assert.equal(browser.store.startupStatus.state, 'cancelled');
   assert.match(browser.store.startupStatus.message, /workspace changed/i);
 });
+
+test('startup switch away and back is remembered while preferences are loading', async () => {
+  const browser = mockBrowser([
+    tab({ id: 1, active: true }),
+    tab({ id: 2, status: 'loading', title: 'Restoring tab' }),
+    tab({ id: 3, workspaceId: 'B', windowId: 1, workspaceName: 'Beta', title: 'Other workspace' })
+  ], {
+    autoUnloadOnStartup: true,
+    skipLoadingTabs: true
+  });
+  const originalGet = browser.api.storage.local.get.bind(browser.api.storage.local);
+  browser.api.storage.local.get = async (...args) => {
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    return originalGet(...args);
+  };
+
+  const controller = createController(browser.api, policy, { discoveryMs: 5, loadingWaitMs: 20 });
+  controller.install();
+
+  const run = controller.runStartupAutoUnload();
+  setTimeout(() => browser.activate(3), 10);
+  setTimeout(() => browser.activate(1), 25);
+  await run;
+
+  assert.deepEqual(browser.calls.discard, []);
+  assert.equal(browser.store.startupStatus.state, 'cancelled');
+  assert.match(browser.store.startupStatus.message, /workspace changed/i);
+});
