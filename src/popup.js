@@ -21,7 +21,9 @@
     tabSortSelect: $("#tab-sort-select"),
     tabList: $("#tab-list"),
     status: $("#status"),
-    retry: $("#retry-button")
+    retry: $("#retry-button"),
+    crossWorkspaceArm: $("#arm-cross-workspace-test-button"),
+    crossWorkspaceTestStatus: $("#cross-workspace-test-status")
   };
 
   let preferences = { ...policy.DEFAULT_PREFERENCES };
@@ -31,6 +33,8 @@
   let selectedWorkspaceId = null;
   let pendingBulk = null;
   let busy = false;
+  let crossWorkspaceTestArmed = false;
+  let crossWorkspaceTestConsumed = false;
 
   const DIAGNOSTIC_KEY = "diagnosticEvents";
   const MAX_DIAGNOSTIC_EVENTS = 100;
@@ -102,6 +106,25 @@
     ui.confirmBulk.disabled = busy;
     ui.retry.disabled = busy;
     ui.retry.hidden = Boolean(workspaceData);
+
+    const currentWorkspaceSelected = snapshot &&
+      policy.isSameWorkspace(snapshot.workspace.id, snapshot.currentWorkspaceId);
+    ui.crossWorkspaceArm.disabled = busy || !snapshot || currentWorkspaceSelected ||
+      crossWorkspaceTestArmed || crossWorkspaceTestConsumed;
+    ui.crossWorkspaceArm.textContent = crossWorkspaceTestConsumed
+      ? "One test attempt already used"
+      : crossWorkspaceTestArmed
+        ? "Armed: one attempt available"
+        : "Arm one diagnostic attempt";
+    ui.crossWorkspaceTestStatus.textContent = !snapshot
+      ? "Workspace detection must succeed before testing."
+      : currentWorkspaceSelected
+        ? "Select a different workspace above to enable the one-time test."
+        : crossWorkspaceTestConsumed
+          ? "The one permitted attempt has been consumed in this temporary profile. Do not reset this state to repeat the crash test."
+          : crossWorkspaceTestArmed
+            ? "ARMED. Keep GX in its current workspace. Click exactly one eligible disposable tab's diagnostic unload button below."
+            : "Ready to inspect another workspace. Arm only when the disposable profile and test tab are prepared.";
     ui.unloadAll.disabled = busy || !snapshot ||
       snapshot.unknownWorkspaceCount > 0 ||
       !policy.isSameWorkspace(snapshot.workspace.id, snapshot.currentWorkspaceId) ||
@@ -259,14 +282,24 @@
       actions.className = "tab-actions";
       const button = document.createElement("button");
       const workspaceIsCurrent = policy.isSameWorkspace(workspaceId, snapshot.currentWorkspaceId);
+      const crossWorkspaceTestIsReady = !workspaceIsCurrent &&
+        crossWorkspaceTestArmed && !crossWorkspaceTestConsumed;
       button.type = "button";
       button.className = "tab-action-button";
-      button.textContent = workspaceIsCurrent ? "Unload tab" : "Switch workspace to unload";
+      button.textContent = workspaceIsCurrent
+        ? "Unload tab"
+        : crossWorkspaceTestIsReady
+          ? "DIAGNOSTIC: Attempt unload once"
+          : crossWorkspaceTestConsumed
+            ? "One test attempt already used"
+            : "Arm diagnostic test above";
       button.setAttribute("aria-label", workspaceIsCurrent
         ? "Unload tab: " + (tab.title || "Untitled tab")
-        : "Switch to this workspace in Opera GX before unloading " + (tab.title || "this tab"));
-      button.disabled = busy || !workspaceIsCurrent;
-      if (workspaceIsCurrent) {
+        : crossWorkspaceTestIsReady
+          ? "Diagnostic only: attempt one cross-workspace unload for " + (tab.title || "Untitled tab")
+          : "Cross-workspace test is not armed");
+      button.disabled = busy || (!workspaceIsCurrent && !crossWorkspaceTestIsReady);
+      if (workspaceIsCurrent || crossWorkspaceTestIsReady) {
         button.addEventListener("click", () => handleIndividual(tab.id, workspaceId));
       }
       actions.appendChild(button);
@@ -386,16 +419,21 @@
       });
       throw new Error("The selected workspace no longer exists. No tab was unloaded.");
     }
+    let diagnosticCrossWorkspaceCandidate = false;
     if (!policy.isSameWorkspace(expectedWorkspaceId, data.currentWorkspaceId)) {
-      await recordDiagnostic({
-        event: "blocked-cross-workspace",
-        action: requireCompleteMap ? "bulk-discard" : "individual-discard",
-        tabId,
-        targetWorkspaceId: normalizeId(expectedWorkspaceId),
-        activeWorkspaceId: data.currentWorkspaceId,
-        reason: "Cross-workspace unloading is temporarily disabled while Opera GX stability is investigated."
-      });
-      throw new Error("Cross-workspace unloading is temporarily disabled because Opera GX has crashed during this operation. Switch to the target workspace in GX, then retry.");
+      diagnosticCrossWorkspaceCandidate = !requireCompleteMap &&
+        crossWorkspaceTestArmed && !crossWorkspaceTestConsumed;
+      if (!diagnosticCrossWorkspaceCandidate) {
+        await recordDiagnostic({
+          event: "blocked-cross-workspace",
+          action: requireCompleteMap ? "bulk-discard" : "individual-discard",
+          tabId,
+          targetWorkspaceId: normalizeId(expectedWorkspaceId),
+          activeWorkspaceId: data.currentWorkspaceId,
+          reason: "Cross-workspace unloading is blocked unless the diagnostic-only one-time test is explicitly armed."
+        });
+        throw new Error("Cross-workspace unloading is blocked. In this diagnostic build, select the other workspace, arm the one-time test, and use only one disposable tab.");
+      }
     }
     if (requireCompleteMap && data.unknownWorkspaceCount > 0) {
       await recordDiagnostic({
@@ -422,6 +460,34 @@
         reasons: evaluation.reasons
       });
     }
+
+    if (diagnosticCrossWorkspaceCandidate && evaluation.eligible) {
+      // Consume the one-time permission durably before calling the browser's native discard API.
+      crossWorkspaceTestConsumed = true;
+      crossWorkspaceTestArmed = false;
+      try {
+        await chrome.storage.local.set({ crossWorkspaceTestConsumed: true });
+      } catch (_error) {
+        await recordDiagnostic({
+          event: "cross-workspace-test-consumption-not-persisted",
+          action: "individual-discard",
+          ...diagnosticTabState(tab),
+          targetWorkspaceId: normalizeId(expectedWorkspaceId),
+          activeWorkspaceId: data.currentWorkspaceId,
+          reason: "Storage failed; the native discard API will not be called."
+        });
+        throw new Error("Could not persist the one-time diagnostic guard. No cross-workspace discard was attempted.");
+      }
+      await recordDiagnostic({
+        event: "cross-workspace-test-authorized",
+        action: "individual-discard",
+        ...diagnosticTabState(tab),
+        targetWorkspaceId: normalizeId(expectedWorkspaceId),
+        activeWorkspaceId: data.currentWorkspaceId,
+        reason: "Diagnostic-only build; one explicit cross-workspace attempt authorized."
+      });
+    }
+
     return { tab, evaluation, data };
   }
 
@@ -682,6 +748,27 @@
   ui.retry.addEventListener("click", () => refresh());
   ui.unloadAll.addEventListener("click", beginBulkReview);
 
+  ui.crossWorkspaceArm.addEventListener("click", async () => {
+    if (busy || !snapshot || crossWorkspaceTestArmed || crossWorkspaceTestConsumed ||
+        policy.isSameWorkspace(snapshot.workspace.id, snapshot.currentWorkspaceId)) return;
+
+    const accepted = window.confirm(
+      "DIAGNOSTIC TEST ONLY. The purpose is to call Opera GX's native discard API on one tab in another workspace. This may crash or close GX. Continue only in the temporary profile with a disposable HTTP/HTTPS test tab and no unsaved work. Only one attempt is allowed."
+    );
+    if (!accepted) return;
+
+    crossWorkspaceTestArmed = true;
+    await recordDiagnostic({
+      event: "cross-workspace-test-armed",
+      action: "individual-discard",
+      targetWorkspaceId: normalizeId(snapshot.workspace.id),
+      activeWorkspaceId: normalizeId(snapshot.currentWorkspaceId),
+      reason: "User explicitly armed one test attempt in the diagnostic-only build."
+    });
+    if (snapshot && workspaceData) render(snapshot, workspaceData);
+    setStatus("Armed for one cross-workspace attempt. Click exactly one diagnostic unload button on a disposable tab.");
+  });
+
   $("#export-diagnostics-button").addEventListener("click", async () => {
     const status = $("#diagnostics-status");
     try {
@@ -733,9 +820,10 @@
   ui.confirmBulk.addEventListener("click", confirmBulk);
 
   async function loadPreferences() {
-    const keys = [...Object.keys(policy.DEFAULT_PREFERENCES), "tabSortMode"];
+    const keys = [...Object.keys(policy.DEFAULT_PREFERENCES), "tabSortMode", "crossWorkspaceTestConsumed"];
     try {
       const stored = await chrome.storage.local.get(keys);
+      crossWorkspaceTestConsumed = stored.crossWorkspaceTestConsumed === true;
       preferences = { ...policy.DEFAULT_PREFERENCES };
       for (const key of Object.keys(policy.DEFAULT_PREFERENCES)) {
         if (typeof stored[key] === "boolean") preferences[key] = stored[key];
@@ -746,7 +834,9 @@
     } catch (_error) {
       preferences = { ...policy.DEFAULT_PREFERENCES };
       tabSortMode = "eligible-first";
-      setStatus("Saved preferences could not be loaded. Conservative defaults are active for this session.");
+      // Fail closed if the durable one-attempt state cannot be read.
+      crossWorkspaceTestConsumed = true;
+      setStatus("Saved preferences could not be loaded. Conservative defaults are active for this session; cross-workspace testing is disabled.");
     }
     enableSafetyPreferenceButtons();
     ui.tabSortSelect.value = tabSortMode;
