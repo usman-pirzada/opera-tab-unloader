@@ -24,6 +24,13 @@
       <p id="workspace-scope-note" class="field-note">Starts with the current workspace each time the popup opens.</p>
     </section>
 
+    <section class="panel diagnostic-warning-panel" aria-labelledby="cross-workspace-diagnostic-title">
+      <h2 id="cross-workspace-diagnostic-title">Cross-workspace diagnostic test</h2>
+      <p class="field-note"><strong>TEST PROFILE ONLY.</strong> Opera GX may exit or crash when this test calls its native discard API for a tab in another workspace. Use only a disposable HTTP/HTTPS page with no unsaved work. This build permits one individual cross-workspace attempt per temporary profile. Bulk cross-workspace unloading remains blocked.</p>
+      <button id="arm-cross-workspace-test-button" class="danger-button" type="button" disabled>Arm one diagnostic attempt</button>
+      <p id="cross-workspace-test-status" class="field-note" role="status" aria-live="polite">Choose another workspace to enable the one-time test.</p>
+    </section>
+
     <details class="panel settings-panel" id="settings-panel">
       <summary>
         <span class="summary-copy">
