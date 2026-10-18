@@ -181,6 +181,8 @@ test('background startup cancellation verifies the actual current workspace', ()
   assert.match(backgroundSource, /function errText\(error\)/);
   assert.match(backgroundSource, /function normalizeId\(value\)/);
   assert.match(backgroundSource, /function sameWorkspace\(targetWorkspaceId, currentWorkspaceId\)/);
+  assert.match(backgroundSource, /observeUnresolvedDiscard\(discardPromise, Boolean\(run \|\| operationOptions\.updateStatusOnUnresolved\)\)/);
+  assert.match(backgroundSource, /updateStatusOnUnresolved: true/);
   assert.match(backgroundSource, /async function onTabActivated\(_activeInfo\)/);
   assert.match(backgroundSource, /currentWorkspaceId = \(await getActiveContext\(\)\)\.currentWorkspaceId/);
   assert.doesNotMatch(backgroundSource, /startupCapturingWorkspace|startupPreRunWorkspaceIds|activationIsInFocusedWindow/);

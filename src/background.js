@@ -72,12 +72,14 @@
       }
     }
 
-    function observeUnresolvedDiscard(promise) {
+    function observeUnresolvedDiscard(promise, updateStatusOnSettle) {
       let tracked;
       tracked = Promise.resolve(promise).then(function () {}, function () {}).then(function () {
         if (unresolvedDiscard === tracked) {
           unresolvedDiscard = null;
-          setActionStatus("error", "A timed-out discard request has settled; review tab state before retrying.");
+          if (updateStatusOnSettle) {
+            setActionStatus("error", "A timed-out bulk discard request has settled; review tab state before retrying.");
+          }
         }
       });
       unresolvedDiscard = tracked;
@@ -544,7 +546,7 @@
         discardResult = await awaitWithinDeadline(discardPromise, tabDeadlineAt, "discarding tab " + tabId);
       } catch (error) {
         if (error && error.operationTimedOut && discardPromise) {
-          observeUnresolvedDiscard(discardPromise);
+          observeUnresolvedDiscard(discardPromise, Boolean(run || operationOptions.updateStatusOnUnresolved));
           return {
             state: "uncertain",
             message: "The unload request for “" + (tab.title || "Tab") +
@@ -922,7 +924,10 @@
             summary.messages.push("The overall deadline was reached. Remaining tabs were not attempted.");
             break;
           }
-          const result = await inspectAndDiscard(tabId, message.workspaceId, preferences, true, null, { deadlineAt: deadlineAt });
+          const result = await inspectAndDiscard(tabId, message.workspaceId, preferences, true, null, {
+            deadlineAt: deadlineAt,
+            updateStatusOnUnresolved: true
+          });
           if (result.state === "success") summary.unloaded += 1;
           else if (result.state === "skipped") summary.skipped += 1;
           else if (result.state === "failure") summary.failed += 1;

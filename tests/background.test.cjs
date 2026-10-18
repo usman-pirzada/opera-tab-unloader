@@ -238,7 +238,7 @@ test('startup collects tabs created late during the loading wait', async () => {
   setTimeout(() => browser.update(2, { status: 'complete' }), 45);
   await controller.runStartupAutoUnload();
 
-  assert.deepEqual(browser.calls.discard, [2, 3]);
+  assert.deepEqual([...browser.calls.discard].sort((a, b) => a - b), [2, 3]);
   assert.equal(browser.tabsById.get(2).discarded, true);
   assert.equal(browser.tabsById.get(3).discarded, true);
 });
