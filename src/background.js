@@ -3,16 +3,137 @@
   if (typeof importScripts === "function" && !root.TabPolicy) importScripts("tab-policy.js");
   const policy = root.TabPolicy || (typeof require === "function" ? require("./tab-policy.js") : null);
   const PREF_KEYS = policy ? Object.keys(policy.DEFAULT_PREFERENCES) : [];
-  const DEFAULT_DISCOVERY_MS = 8000;
-  const DEFAULT_LOADING_WAIT_MS = 20000;
+  const DEFAULT_OPERATION_STATUS = Object.freeze({ state: "idle", message: "Ready." });
+  const STATUS_COLORS = Object.freeze({
+    idle: "#7B8493",
+    working: "#3985FF",
+    success: "#20A464",
+    error: "#E34850"
+  });
 
   function createController(api, tabPolicy, options) {
-    const discoveryMs = options && Number.isFinite(options.discoveryMs) ? options.discoveryMs : DEFAULT_DISCOVERY_MS;
-    const loadingWaitMs = options && Number.isFinite(options.loadingWaitMs) ? options.loadingWaitMs : DEFAULT_LOADING_WAIT_MS;
     let operationQueue = Promise.resolve();
     let startupRun = null;
     let startupAttempted = false;
     let startupSequence = 0;
+    let unresolvedDiscard = null;
+    let statusEnabled = true;
+
+    function timeoutError(operation) {
+      const error = new Error(operation + " exceeded its configured time budget.");
+      error.operationTimedOut = true;
+      return error;
+    }
+
+    async function awaitWithinDeadline(promise, deadlineAt, operation) {
+      if (!Number.isFinite(deadlineAt)) return await promise;
+      const remaining = deadlineAt - Date.now();
+      if (remaining <= 0) throw timeoutError(operation);
+      let timer = null;
+      try {
+        return await Promise.race([
+          Promise.resolve(promise),
+          new Promise(function (_resolve, reject) {
+            timer = setTimeout(function () { reject(timeoutError(operation)); }, remaining);
+          })
+        ]);
+      } finally {
+        if (timer !== null) clearTimeout(timer);
+      }
+    }
+
+    function observeUnresolvedDiscard(promise) {
+      let tracked;
+      tracked = Promise.resolve(promise).then(function () {}, function () {}).then(function () {
+        if (unresolvedDiscard === tracked) {
+          unresolvedDiscard = null;
+          setActionStatus("error", "A timed-out discard request has settled; review tab state before retrying.");
+        }
+      });
+      unresolvedDiscard = tracked;
+    }
+
+    function drawStatusIcon(state, size) {
+      const canvas = new OffscreenCanvas(size, size);
+      const context = canvas.getContext("2d");
+      const scale = size / 16;
+      context.clearRect(0, 0, size, size);
+      context.fillStyle = "#20232B";
+      context.fillRect(scale, scale, size - 2 * scale, size - 2 * scale);
+      context.fillStyle = "#F2F4F8";
+      context.fillRect(size * 0.23, size * 0.18, size * 0.49, size * 0.60);
+      context.strokeStyle = "#737C8B";
+      context.lineWidth = Math.max(1, size / 18);
+      [0.36, 0.49, 0.62].forEach(function (fraction, index) {
+        context.beginPath();
+        context.moveTo(size * 0.32, size * fraction);
+        context.lineTo(size * (index === 2 ? 0.54 : 0.62), size * fraction);
+        context.stroke();
+      });
+      context.beginPath();
+      context.arc(size * 0.76, size * 0.76, size * 0.20, 0, Math.PI * 2);
+      context.fillStyle = "#20232B";
+      context.fill();
+      context.beginPath();
+      context.arc(size * 0.76, size * 0.76, size * 0.16, 0, Math.PI * 2);
+      context.fillStyle = STATUS_COLORS[state] || STATUS_COLORS.idle;
+      context.fill();
+      context.strokeStyle = "#FFFFFF";
+      context.lineWidth = Math.max(1, size / 32);
+      context.stroke();
+      return context.getImageData(0, 0, size, size);
+    }
+
+    async function setActionStatus(state, message) {
+      const normalizedState = Object.prototype.hasOwnProperty.call(STATUS_COLORS, state) ? state : "idle";
+      const status = {
+        state: normalizedState,
+        message: typeof message === "string" && message ? message : DEFAULT_OPERATION_STATUS.message,
+        time: new Date().toISOString()
+      };
+      try {
+        const stored = await api.storage.local.get("showStatusIndicator");
+        statusEnabled = stored.showStatusIndicator !== false;
+      } catch (_error) {}
+      if (api.action) {
+        try {
+          if (typeof OffscreenCanvas === "function" && typeof api.action.setIcon === "function") {
+            const imageData = {};
+            const iconState = statusEnabled ? normalizedState : "idle";
+            [16, 32, 48].forEach(function (size) { imageData[size] = drawStatusIcon(iconState, size); });
+            await api.action.setIcon({ imageData: imageData });
+            if (!statusEnabled && typeof api.action.setBadgeText === "function") {
+              await api.action.setBadgeText({ text: "" });
+            }
+          } else if (typeof api.action.setBadgeText === "function") {
+            await api.action.setBadgeText({ text: statusEnabled && normalizedState !== "idle" ? "●" : "" });
+            if (typeof api.action.setBadgeBackgroundColor === "function") {
+              await api.action.setBadgeBackgroundColor({
+                color: statusEnabled ? (STATUS_COLORS[normalizedState] || STATUS_COLORS.idle) : STATUS_COLORS.idle
+              });
+            }
+          }
+        } catch (_error) {
+          try {
+            if (typeof api.action.setBadgeText === "function") {
+              await api.action.setBadgeText({ text: statusEnabled && normalizedState !== "idle" ? "●" : "" });
+              if (typeof api.action.setBadgeBackgroundColor === "function") {
+                await api.action.setBadgeBackgroundColor({ color: STATUS_COLORS[normalizedState] || STATUS_COLORS.idle });
+              }
+            }
+          } catch (_ignored) {}
+        }
+        try {
+          if (typeof api.action.setTitle === "function") {
+            await api.action.setTitle({
+              title: "Workspace Tab Unloader · " + (statusEnabled ? status.message : "Status indicator disabled")
+            });
+          }
+        } catch (_error) {}
+      }
+      try { await api.storage.local.set({ operationStatus: status }); } catch (_error) {}
+      return status;
+    }
 
     const normalizeId = (value) => tabPolicy.normalizeWorkspaceId(value);
     const sameWorkspace = (left, right) => tabPolicy.isSameWorkspace(left, right);
@@ -20,7 +141,25 @@
       ? error.message : "The browser returned an unknown API error.";
 
     function withOperationLock(task) {
-      const operation = operationQueue.catch(function () {}).then(task);
+      const operation = operationQueue.catch(function () {}).then(async function () {
+        await setActionStatus("working", "An unload operation is in progress.");
+        try {
+          const result = await task();
+          let state = "success";
+          let message = result && typeof result.message === "string" ? result.message : "Operation completed.";
+          if (result && (result.failed > 0 ||
+              ["aborted", "cancelled", "uncertain", "failure", "timeout", "failed"].includes(result.state))) {
+            state = "error";
+          } else if (result && ["skipped", "review-changed", "idle"].includes(result.state)) {
+            state = "idle";
+          }
+          await setActionStatus(state, message);
+          return result;
+        } catch (error) {
+          await setActionStatus("error", errText(error));
+          throw error;
+        }
+      });
       operationQueue = operation.catch(function () {});
       return operation;
     }
@@ -30,16 +169,10 @@
       try {
         stored = await api.storage.local.get(PREF_KEYS);
       } catch (_error) {}
-      const preferences = { ...tabPolicy.DEFAULT_PREFERENCES };
-      PREF_KEYS.forEach(function (key) {
-        if (typeof stored[key] === "boolean") preferences[key] = stored[key];
-      });
-      if (override && typeof override === "object") {
-        PREF_KEYS.forEach(function (key) {
-          if (typeof override[key] === "boolean") preferences[key] = override[key];
-        });
-      }
-      return { preferences: preferences, stored: stored };
+      return {
+        preferences: tabPolicy.normalizePreferences({ ...stored, ...(override || {}) }),
+        stored: stored
+      };
     }
 
     async function saveStartupStatus(status) {
@@ -52,11 +185,22 @@
         failed: Number.isInteger(status.failed) ? status.failed : 0
       };
       try { await api.storage.local.set({ startupStatus: value }); } catch (_error) {}
+      if (value.state === "running") {
+        await setActionStatus("working", value.message);
+      } else if (["completed", "success"].includes(value.state)) {
+        await setActionStatus("success", value.message || "Startup operation completed.");
+      } else if (["cancelled", "failed", "aborted", "timeout", "error"].includes(value.state)) {
+        await setActionStatus("error", value.message || "Startup operation stopped.");
+      } else {
+        await setActionStatus("idle", value.message || "Startup auto-unload did not run.");
+      }
       return value;
     }
 
-    async function getActiveContext() {
-      const activeTabs = await api.tabs.query({ active: true, lastFocusedWindow: true });
+    async function getActiveContext(deadlineAt) {
+      const activeTabs = await awaitWithinDeadline(
+        api.tabs.query({ active: true, lastFocusedWindow: true }), deadlineAt, "reading the active workspace"
+      );
       const activeTab = activeTabs.find(function (tab) { return Number.isInteger(tab.id); }) || null;
       return {
         activeTab: activeTab,
@@ -64,9 +208,9 @@
       };
     }
 
-    async function getWorkspaceContext() {
-      const active = await getActiveContext();
-      const allTabs = await api.tabs.query({});
+    async function getWorkspaceContext(deadlineAt) {
+      const active = await getActiveContext(deadlineAt);
+      const allTabs = await awaitWithinDeadline(api.tabs.query({}), deadlineAt, "enumerating tabs");
       return {
         activeTab: active.activeTab,
         currentWorkspaceId: active.currentWorkspaceId,
@@ -188,14 +332,32 @@
       }
     }
 
-    async function inspectAndDiscard(tabId, targetWorkspaceId, preferences, requireCompleteMap, run) {
+    async function inspectAndDiscard(tabId, targetWorkspaceId, preferences, requireCompleteMap, run, operation) {
+      const prefs = tabPolicy.normalizePreferences(preferences);
+      const operationOptions = operation && typeof operation === "object" ? operation : {};
+      const startedAt = Date.now();
+      const tabDeadlineAt = Math.min(
+        startedAt + prefs.perTabTimeoutSeconds * 1000,
+        Number.isFinite(operationOptions.deadlineAt) ? operationOptions.deadlineAt : Number.POSITIVE_INFINITY
+      );
+      if (unresolvedDiscard) {
+        return { state: "aborted", message: "A previous discard request exceeded its timeout and remains unresolved. No further tabs were attempted." };
+      }
+      if (Date.now() >= tabDeadlineAt) {
+        return { state: "aborted", message: "The operation deadline was reached before this tab could be checked." };
+      }
       if (run && run.cancelled) {
         return { state: "aborted", message: run.cancelReason || "Startup auto-unload was cancelled." };
       }
 
       let context;
-      try { context = await getWorkspaceContext(); } catch (error) {
-        return { state: "aborted", message: "Could not verify the active workspace: " + errText(error) };
+      try { context = await getWorkspaceContext(tabDeadlineAt); } catch (error) {
+        return {
+          state: "aborted",
+          message: error && error.operationTimedOut
+            ? "Per-tab time budget expired while verifying the active workspace. No unload was attempted."
+            : "Could not verify the active workspace: " + errText(error)
+        };
       }
       if (run && run.cancelled) {
         return { state: "aborted", message: run.cancelReason || "Startup auto-unload was cancelled." };
@@ -212,7 +374,12 @@
       }
 
       let tab;
-      try { tab = await api.tabs.get(tabId); } catch (_error) {
+      try {
+        tab = await awaitWithinDeadline(api.tabs.get(tabId), tabDeadlineAt, "reading tab " + tabId);
+      } catch (error) {
+        if (error && error.operationTimedOut) {
+          return { state: "aborted", message: "Per-tab time budget expired while reading tab " + tabId + ". Remaining tabs were not attempted." };
+        }
         return { state: "skipped", message: "Tab " + tabId + " no longer exists before the unload attempt; skipped." };
       }
       const evaluation = tabPolicy.evaluateTab(tab, targetWorkspaceId, preferences);
@@ -226,8 +393,13 @@
         return { state: "aborted", message: run.cancelReason || "Startup auto-unload was cancelled." };
       }
       let latestWorkspaceId;
-      try { latestWorkspaceId = (await getActiveContext()).currentWorkspaceId; } catch (error) {
-        return { state: "aborted", message: "Could not recheck workspace before unloading: " + errText(error) };
+      try { latestWorkspaceId = (await getActiveContext(tabDeadlineAt)).currentWorkspaceId; } catch (error) {
+        return {
+          state: "aborted",
+          message: error && error.operationTimedOut
+            ? "Per-tab time budget expired before the final workspace check. No unload was attempted."
+            : "Could not recheck workspace before unloading: " + errText(error)
+        };
       }
       if (run && run.cancelled) {
         return { state: "aborted", message: run.cancelReason || "Startup auto-unload was cancelled." };
@@ -237,16 +409,35 @@
         return { state: "aborted", message: "The active workspace changed immediately before unloading. Remaining tabs were not attempted." };
       }
 
+      if (Date.now() >= tabDeadlineAt ||
+          (Number.isFinite(operationOptions.deadlineAt) && Date.now() >= operationOptions.deadlineAt)) {
+        return { state: "aborted", message: "The time budget expired immediately before the discard request. No unload was attempted." };
+      }
+
       let discardResult;
       let discardError = null;
-      try { discardResult = await api.tabs.discard(tabId); } catch (error) { discardError = error; }
+      let discardPromise = null;
+      try {
+        discardPromise = Promise.resolve(api.tabs.discard(tabId));
+        discardResult = await awaitWithinDeadline(discardPromise, tabDeadlineAt, "discarding tab " + tabId);
+      } catch (error) {
+        if (error && error.operationTimedOut && discardPromise) {
+          observeUnresolvedDiscard(discardPromise);
+          return {
+            state: "uncertain",
+            message: "The unload request for “" + (tab.title || "Tab") +
+              "” exceeded its time budget. Its outcome is uncertain; no further tabs were attempted."
+          };
+        }
+        discardError = error;
+      }
 
       if (discardResult && discardResult.discarded === true) {
         return { state: "success", message: "\"" + (tab.title || "Tab") + "\" was unloaded." };
       }
 
       let after;
-      try { after = await api.tabs.get(tabId); } catch (error) {
+      try { after = await awaitWithinDeadline(api.tabs.get(tabId), tabDeadlineAt, "verifying tab " + tabId); } catch (error) {
         return {
           state: "uncertain",
           message: "Unload outcome for \"" + (tab.title || "Tab") +
@@ -270,23 +461,36 @@
     }
 
     async function unloadOneMessage(message) {
+      const requestStartedAt = Date.now();
       return withOperationLock(async function () {
         const loaded = await loadPreferences(message.preferences);
-        return inspectAndDiscard(message.tabId, message.workspaceId, loaded.preferences, false, null);
+        return inspectAndDiscard(message.tabId, message.workspaceId, loaded.preferences, false, null, {
+          deadlineAt: requestStartedAt + loaded.preferences.overallDeadlineSeconds * 1000
+        });
       });
     }
 
     async function unloadBatchMessage(message) {
+      const requestStartedAt = Date.now();
       return withOperationLock(async function () {
         const loaded = await loadPreferences(message.preferences);
         const preferences = loaded.preferences;
+        const deadlineAt = requestStartedAt + preferences.overallDeadlineSeconds * 1000;
+        if (Date.now() >= deadlineAt) {
+          return { state: "timeout", message: "The overall deadline expired before bulk review could start. No tabs were unloaded." };
+        }
         const ids = Array.from(new Set((Array.isArray(message.tabIds) ? message.tabIds : [])
           .filter(function (id) { return Number.isInteger(id) && id >= 0; }))).sort(function (a, b) { return a - b; });
         if (!ids.length) return { state: "aborted", message: "No reviewed tab IDs were supplied. Nothing was unloaded." };
 
         let context;
-        try { context = await getWorkspaceContext(); } catch (error) {
-          return { state: "aborted", message: "Could not verify workspace before bulk unloading: " + errText(error) };
+        try { context = await getWorkspaceContext(deadlineAt); } catch (error) {
+          return {
+            state: error && error.operationTimedOut ? "timeout" : "aborted",
+            message: error && error.operationTimedOut
+              ? "The overall deadline expired while reading workspace state. No tabs were unloaded."
+              : "Could not verify workspace before bulk unloading: " + errText(error)
+          };
         }
         if (!sameWorkspace(message.workspaceId, context.currentWorkspaceId)) {
           return { state: "aborted", message: "The active workspace changed before bulk unloading. Nothing was unloaded." };
@@ -308,7 +512,13 @@
 
         const summary = { state: "completed", unloaded: 0, skipped: 0, failed: 0, aborted: false, messages: [] };
         for (const tabId of ids) {
-          const result = await inspectAndDiscard(tabId, message.workspaceId, preferences, true, null);
+          if (Date.now() >= deadlineAt) {
+            summary.state = "timeout";
+            summary.aborted = true;
+            summary.messages.push("The overall deadline was reached. Remaining tabs were not attempted.");
+            break;
+          }
+          const result = await inspectAndDiscard(tabId, message.workspaceId, preferences, true, null, { deadlineAt: deadlineAt });
           if (result.state === "success") summary.unloaded += 1;
           else if (result.state === "skipped") summary.skipped += 1;
           else if (result.state === "failure") summary.failed += 1;
@@ -330,7 +540,7 @@
     }
 
     async function startupContextStillCurrent(run) {
-      const context = await getWorkspaceContext();
+      const context = await getWorkspaceContext(run.deadlineAt);
       if (run.cancelled) return { ok: false, context: context };
       if (!sameWorkspace(run.workspaceId, context.currentWorkspaceId)) {
         cancelStartupRun(run, "Workspace changed during startup auto-unload. Tabs in the old workspace will not be attempted further.");
@@ -340,7 +550,10 @@
     }
 
     async function waitForLoadingCandidates(run, timeoutMs, preferences, waitForLoads) {
-      const deadline = Date.now() + timeoutMs;
+      const deadline = Math.min(
+        Date.now() + timeoutMs,
+        Number.isFinite(run.deadlineAt) ? run.deadlineAt : Number.POSITIVE_INFINITY
+      );
       const quietPeriodMs = 1200;
       const readinessPreferences = { ...preferences, skipLoadingTabs: false };
       run.phase = "waiting-load";
@@ -352,7 +565,11 @@
           for (const tabId of candidateIds) {
             if (run.cancelled) return false;
             try {
-              const tab = await api.tabs.get(tabId);
+              const tab = await awaitWithinDeadline(
+                api.tabs.get(tabId),
+                Math.min(Date.now() + preferences.perTabTimeoutSeconds * 1000, deadline),
+                "checking a loading tab"
+              );
               const couldBecomeEligible = tabPolicy.evaluateTab(
                 tab, run.workspaceId, readinessPreferences
               ).eligible;
@@ -361,7 +578,8 @@
                 loadingFound = true;
                 break;
               }
-            } catch (_error) {
+            } catch (error) {
+              if (error && error.operationTimedOut) return false;
               // A tab closed during restoration is no longer a candidate.
             }
           }
@@ -386,6 +604,7 @@
     async function runStartupAutoUnload() {
       if (startupAttempted) return;
       startupAttempted = true;
+      const startupStartedAt = Date.now();
       // Start reading the active workspace immediately, before storage latency can
       // delay the startup scope snapshot.
       const activePromise = getActiveContext().then(function (value) {
@@ -421,15 +640,20 @@
         updateGeneration: 0,
         wake: null,
         loadingWaitExpired: false,
-        startedAt: Date.now(),
-        lastActivityAt: Date.now()
+        startedAt: startupStartedAt,
+        lastActivityAt: Date.now(),
+        deadlineAt: Number.POSITIVE_INFINITY
       };
       startupRun = run;
 
       try {
-        const loaded = await preferencesPromise;
+        const loaded = await awaitWithinDeadline(preferencesPromise, startupStartedAt + 10000, "loading startup settings");
         const preferences = loaded.preferences;
-        if (!preferences.autoUnloadOnStartup) return;
+        run.deadlineAt = startupStartedAt + preferences.overallDeadlineSeconds * 1000;
+        if (!preferences.autoUnloadOnStartup) {
+          await setActionStatus("idle", "Startup auto-unload is disabled.");
+          return;
+        }
         if (run.cancelled) {
           await saveStartupStatus({
             state: "cancelled",
@@ -444,7 +668,11 @@
         });
 
         try {
-          (await api.tabs.query({})).forEach(function (tab) { addCandidate(run, tab); });
+          (await awaitWithinDeadline(
+            api.tabs.query({}),
+            Math.min(run.deadlineAt, Date.now() + (options && Number.isFinite(options.discoveryMs) ? options.discoveryMs : preferences.startupDiscoverySeconds * 1000)),
+            "discovering restored tabs"
+          )).forEach(function (tab) { addCandidate(run, tab); });
         } catch (error) {
           await saveStartupStatus({ state: "failed", message: "Startup auto-unload could not enumerate tabs: " + errText(error) });
           return;
@@ -452,7 +680,11 @@
 
         // Include tabs that Opera restores shortly after the startup event.
         // Workspace activation events cancel this run rather than retargeting it.
-        await waitForSignal(run, discoveryMs);
+        const discoveryMs = options && Number.isFinite(options.discoveryMs)
+          ? options.discoveryMs
+          : preferences.startupDiscoverySeconds * 1000;
+        const discoveryWaitMs = Math.max(0, Math.min(discoveryMs, run.deadlineAt - Date.now()));
+        if (discoveryWaitMs > 0) await waitForSignal(run, discoveryWaitMs);
         if (run.cancelled) {
           await saveStartupStatus({ state: "cancelled", message: run.cancelReason + " No further tabs were attempted." });
           return;
@@ -472,16 +704,30 @@
           return;
         }
 
+        if (Date.now() >= run.deadlineAt) {
+          await saveStartupStatus({
+            state: "timeout",
+            message: "The overall startup deadline expired during discovery. No unload attempts were started."
+          });
+          return;
+        }
         latest.context.allTabs.forEach(function (tab) { addCandidate(run, tab); });
 
         // Keep collecting created/restored tabs through the loading grace period.
         // Even when loading-tab protection is off, allow a short quiet period to
         // catch session-restored tabs created just after the first query.
-        if (run.candidates.size) {
+        const configuredLoadingWaitMs = options && Number.isFinite(options.loadingWaitMs)
+          ? options.loadingWaitMs
+          : preferences.startupLoadingWaitSeconds * 1000;
+        if (run.candidates.size && Date.now() < run.deadlineAt) {
           if (preferences.skipLoadingTabs) {
-            run.loadingWaitExpired = !(await waitForLoadingCandidates(run, loadingWaitMs, preferences, true));
+            run.loadingWaitExpired = !(await waitForLoadingCandidates(
+              run, Math.min(configuredLoadingWaitMs, run.deadlineAt - Date.now()), preferences, true
+            ));
           } else {
-            await waitForLoadingCandidates(run, Math.min(loadingWaitMs, 2000), preferences, false);
+            await waitForLoadingCandidates(
+              run, Math.min(configuredLoadingWaitMs, 2000, run.deadlineAt - Date.now()), preferences, false
+            );
           }
         }
         if (run.cancelled) {
@@ -489,6 +735,13 @@
           return;
         }
 
+        if (Date.now() >= run.deadlineAt) {
+          await saveStartupStatus({
+            state: "timeout",
+            message: "The overall startup deadline expired during session restoration. No unload attempts were started."
+          });
+          return;
+        }
         const finalSnapshot = await startupContextStillCurrent(run);
         if (!finalSnapshot.ok) {
           await saveStartupStatus({ state: "cancelled", message: run.cancelReason + " No further tabs were attempted." });
@@ -514,6 +767,12 @@
             if (!Number.isInteger(nextTabId)) break;
             const tabId = nextTabId;
             processed.add(tabId);
+            if (Date.now() >= run.deadlineAt) {
+              result.state = "timeout";
+              result.aborted = true;
+              result.messages.push("The overall startup deadline was reached. Remaining tabs were not attempted.");
+              break;
+            }
             if (run.cancelled) {
               result.state = "cancelled";
               result.aborted = true;
@@ -533,7 +792,9 @@
               result.messages.push("Workspace identity became ambiguous. Remaining tabs were not attempted.");
               break;
             }
-            const outcome = await inspectAndDiscard(tabId, run.workspaceId, preferences, true, run);
+            const outcome = await inspectAndDiscard(tabId, run.workspaceId, preferences, true, run, {
+              deadlineAt: run.deadlineAt
+            });
             if (outcome.state === "success") result.unloaded += 1;
             else if (outcome.state === "skipped") result.skipped += 1;
             else if (outcome.state === "failure") result.failed += 1;
@@ -602,6 +863,36 @@
       if (api.runtime && api.runtime.onStartup && api.runtime.onStartup.addListener) {
         api.runtime.onStartup.addListener(function () { runStartupAutoUnload().catch(function () {}); });
       }
+      if (api.storage && api.storage.onChanged && api.storage.onChanged.addListener) {
+        api.storage.onChanged.addListener(function (changes, areaName) {
+          if (areaName === "local" && changes.showStatusIndicator) {
+            statusEnabled = changes.showStatusIndicator.newValue !== false;
+            setActionStatus("idle", statusEnabled ? "Ready." : "Status indicator disabled.").catch(function () {});
+          }
+        });
+      }
+      if (api.commands && api.commands.onCommand && api.commands.onCommand.addListener) {
+        api.commands.onCommand.addListener(function (command) {
+          if (command !== "bulk-unload-review") return;
+          Promise.resolve().then(async function () {
+            await api.storage.local.set({
+              bulkReviewRequest: { id: Date.now(), createdAt: Date.now() }
+            });
+            if (api.action && typeof api.action.openPopup === "function") {
+              try {
+                await api.action.openPopup();
+              } catch (_error) {
+                await setActionStatus("error", "Shortcut review requested; open the extension popup to confirm.");
+              }
+            } else {
+              await setActionStatus("error", "This browser cannot open the popup from a shortcut. Click the extension icon to review.");
+            }
+          }).catch(function (error) {
+            setActionStatus("error", "Could not open bulk review: " + errText(error)).catch(function () {});
+          });
+        });
+      }
+      setActionStatus("idle", "Ready.").catch(function () {});
       if (api.tabs && api.tabs.onActivated && api.tabs.onActivated.addListener) {
         api.tabs.onActivated.addListener(function (info) { onTabActivated(info).catch(function () {}); });
       }
