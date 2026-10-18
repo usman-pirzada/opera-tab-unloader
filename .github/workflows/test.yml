@@ -34,7 +34,7 @@ jobs:
         run: |
           version="$(node -p "require('./package.json').version")"
           mkdir -p dist
-          zip -r "dist/opera-tab-unloader-v${version}.zip" manifest.json popup.html styles.css src README.md
+          zip -r "dist/opera-tab-unloader-v${version}.zip" manifest.json popup.html options.html styles.css options.css src icons README.md
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Upload extension ZIP

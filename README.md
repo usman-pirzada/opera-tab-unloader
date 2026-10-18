@@ -9,9 +9,12 @@ A local-only Manifest V3 extension for inspecting tabs across Opera GX workspace
 - **Workspace previews:** workspaces are identified by Opera's `workspaceId`. Other workspaces remain read-only until made current in Opera GX.
 - **Safe manual unload:** individual and confirmed bulk operations are coordinated by a background service worker, recheck the current workspace and policy, and serialize native discard operations.
 - **Honest outcome handling:** the native discard result is used when it confirms success. Fallback verification distinguishes confirmed failure from an uncertain result; an uncertain result stops the rest of a batch.
-- **Configurable loading-tab protection:** loading tabs are skipped by default. Turning off **Skip tabs that are currently loading** allows attempts only when the other metadata and URL checks pass; where available, `pendingUrl` is checked as the navigation target.
-- **Optional startup auto-unload:** opt in through Preferences. The extension captures the workspace that is current at startup, waits a bounded period for session restoration/loading tabs, and applies the same safety checks. Switching to a different workspace cancels the run; it never retargets the batch to the new workspace.
-- **Persistent status:** the popup displays the latest startup-auto-unload result. The extension does not store full URLs or page contents for diagnostics.
+- **Configurable loading-tab protection:** loading tabs are skipped by default. Turning off **Skip tabs that are currently loading** allows attempts only when the other metadata and URL checks pass; pending URLs are checked when available. The missing-pending-URL fallback defaults to skipping the tab.
+- **Dedicated Settings page:** configure all preferences, see each recommended default, validate numeric ranges and cross-setting constraints, confirm safety-reducing changes, and reset settings to defaults.
+- **Timing limits:** the overall deadline applies to startup and manual bulk operations. Each candidate has a separate time budget; a timed-out discard is treated as uncertain and blocks further attempts until it settles.
+- **Optional startup auto-unload:** opt in through Settings. The extension captures the workspace current at startup, waits a bounded period for session restoration, and cancels the run if you switch away.
+- **Toolbar status indicator:** grey when idle, blue while a manual or startup unload is active, green after success, and red after an error or cancellation. The indicator can be disabled in Settings.
+- **Keyboard bulk review:** use `Ctrl+Shift+U` (suggested default) to open the popup and review candidates. Bulk unloading still requires confirmation. Change the shortcut in Opera's extension-shortcuts page.
 - No content scripts, website host permissions, remote code, external services, telemetry, analytics, or runtime dependencies.
 
 > **State limitation:** Extension APIs cannot detect every unsaved state inside arbitrary websites. Discarding a page can lose state held only in page memory. Save important work before unloading tabs.
@@ -25,11 +28,11 @@ The extension always skips:
 - Non-HTTP(S) pages such as browser-internal pages and URLs containing embedded credentials.
 - Tabs without a verifiable workspace ID or tabs belonging to a different workspace.
 
-By default, the extension also skips pinned tabs, audible tabs, and tabs marked non-auto-discardable. These three protections can be switched off in Preferences.
+By default, the extension also skips pinned tabs, audible tabs, and tabs marked non-auto-discardable. The full Settings page explains these preferences and asks for confirmation before disabling protections. When loading-tab protection is OFF, tabs with no pending URL are still skipped by default; the advanced last-committed-URL fallback is explicitly warned about.
 
-Bulk manual unloading requires confirmation. The background coordinator rechecks the reviewed candidate set before the operation and checks workspace identity and eligibility before every attempt. It stops when an outcome is uncertain or the active workspace changes. Startup auto-unload is disabled by default and uses a shared operation queue with manual actions.
+Bulk manual unloading requires confirmation. The background coordinator rechecks the reviewed candidate set before the operation and checks workspace identity and eligibility before every attempt. Each operation has an overall deadline, and each candidate has a bounded time budget. If a native discard request times out, the result is uncertain and later unload attempts remain blocked until that request settles. Startup auto-unload is disabled by default and uses the same serialized operation queue as manual actions.
 
-Startup automation only targets tabs assigned to the workspace captured at startup. If the current workspace cannot be identified, if workspace identity becomes ambiguous, or if the workspace differs from the last observed identity, startup auto-unload fails closed. Loading tabs are allowed time to finish; after the bounded wait, tabs still loading remain protected when the loading-tab preference is ON. The operation does not switch workspaces.
+Startup automation only targets tabs assigned to the workspace captured at startup. If the current workspace cannot be identified, if workspace identity becomes ambiguous, or if the workspace differs from the last observed identity, startup auto-unload fails closed. Loading tabs are allowed time to finish; after the bounded wait, tabs still loading remain protected when the loading-tab preference is ON. The startup and loading waits are configurable and share the overall operation deadline. The operation does not switch workspaces. If the service worker is terminated, the in-memory run may end early; the extension must not resume an old run against a different workspace.
 
 ## Compatibility notes
 
@@ -60,7 +63,11 @@ The suite checks policy rules and mocked asynchronous background operations. The
 - Confirm the popup counts update while tabs are created, loading, completed, removed, activated, and discarded.
 - Confirm a burst of tab events does not leave a stale snapshot visible after newer data arrives.
 - Test the Refresh button after startup and after changing workspaces.
-- Test loading-tab protection ON and OFF, including a known HTTP(S) pending navigation and an internal pending URL.
+- Test loading-tab protection ON and OFF, including a known HTTP(S) pending navigation, an internal pending URL, and a missing pending URL under each fallback policy.
+- Test invalid, decimal, out-of-range, and cross-setting-incompatible timing values. Confirm they are rejected without saving.
+- Confirm risky setting changes require confirmation and Reset to defaults restores the documented values.
+- Test the keyboard shortcut opens a bulk-review confirmation rather than discarding immediately.
+- Confirm icon status updates for startup and manual unloads and that disabling the indicator removes the dot.
 - Test individual unloads and bulk operations where discard returns a discarded tab, returns no tab, rejects, or the tab disappears during verification.
 - Confirm an uncertain result stops the batch and is not reported as a successful unload.
 - Enable startup auto-unload; close and reopen Opera GX with a workspace containing several loading tabs.
@@ -72,6 +79,6 @@ The suite checks policy rules and mocked asynchronous background operations. The
 ## Permissions
 
 - `tabs`: read tab metadata, inspect workspace IDs, enumerate tabs, subscribe to tab lifecycle events, and request native discard.
-- `storage`: save preferences, sorting, startup workspace consistency data, and a summary of the latest startup operation.
+- `storage`: save preferences, sorting, shortcut review requests, and a summary of the latest startup operation.
 
-No website host permissions or content scripts are declared. Tab-supplied text is inserted using `textContent`, not interpreted as HTML.
+No website host permissions or content scripts are declared. Settings are stored locally. Tab-supplied text is inserted using `textContent`, not interpreted as HTML.

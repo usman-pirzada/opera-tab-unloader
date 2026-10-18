@@ -70,17 +70,19 @@
         context.lineTo(size * (index === 2 ? 0.54 : 0.62), size * fraction);
         context.stroke();
       });
-      context.beginPath();
-      context.arc(size * 0.76, size * 0.76, size * 0.20, 0, Math.PI * 2);
-      context.fillStyle = "#20232B";
-      context.fill();
-      context.beginPath();
-      context.arc(size * 0.76, size * 0.76, size * 0.16, 0, Math.PI * 2);
-      context.fillStyle = STATUS_COLORS[state] || STATUS_COLORS.idle;
-      context.fill();
-      context.strokeStyle = "#FFFFFF";
-      context.lineWidth = Math.max(1, size / 32);
-      context.stroke();
+      if (state !== "off") {
+        context.beginPath();
+        context.arc(size * 0.76, size * 0.76, size * 0.20, 0, Math.PI * 2);
+        context.fillStyle = "#20232B";
+        context.fill();
+        context.beginPath();
+        context.arc(size * 0.76, size * 0.76, size * 0.16, 0, Math.PI * 2);
+        context.fillStyle = STATUS_COLORS[state] || STATUS_COLORS.idle;
+        context.fill();
+        context.strokeStyle = "#FFFFFF";
+        context.lineWidth = Math.max(1, size / 32);
+        context.stroke();
+      }
       return context.getImageData(0, 0, size, size);
     }
 
@@ -99,7 +101,7 @@
         try {
           if (typeof OffscreenCanvas === "function" && typeof api.action.setIcon === "function") {
             const imageData = {};
-            const iconState = statusEnabled ? normalizedState : "idle";
+            const iconState = statusEnabled ? normalizedState : "off";
             [16, 32, 48].forEach(function (size) { imageData[size] = drawStatusIcon(iconState, size); });
             await api.action.setIcon({ imageData: imageData });
             if (!statusEnabled && typeof api.action.setBadgeText === "function") {
@@ -885,7 +887,7 @@
               try {
                 await api.action.openPopup();
               } catch (_error) {
-                await setActionStatus("error", "Shortcut review requested; open the extension popup to confirm.");
+                await setActionStatus("idle", "Bulk review is queued; click the extension icon if it did not open.");
               }
             } else {
               await setActionStatus("error", "This browser cannot open the popup from a shortcut. Click the extension icon to review.");

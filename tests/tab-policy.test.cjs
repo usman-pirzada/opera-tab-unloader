@@ -4,6 +4,8 @@ const policy = require('../src/tab-policy.js');
 const fs = require('node:fs');
 const path = require('node:path');
 const popupSource = fs.readFileSync(path.join(__dirname, '../src/popup.js'), 'utf8');
+const optionsSource = fs.readFileSync(path.join(__dirname, '../src/options.js'), 'utf8');
+const optionsHtml = fs.readFileSync(path.join(__dirname, '../options.html'), 'utf8');
 const backgroundSource = fs.readFileSync(path.join(__dirname, '../src/background.js'), 'utf8');
 
 function safeTab(overrides = {}) {
@@ -170,7 +172,7 @@ test('background coordinator checks the active workspace before every discard at
   assert.match(backgroundSource, /async function inspectAndDiscard/);
   assert.match(backgroundSource, /latestWorkspaceId = \(await getActiveContext\(tabDeadlineAt\)\)\.currentWorkspaceId/);
   assert.match(backgroundSource, /if \(!sameWorkspace\(targetWorkspaceId, latestWorkspaceId\)\)/);
-  assert.match(backgroundSource, /await api\.tabs\.discard\(tabId\)/);
+  assert.match(backgroundSource, /api\.tabs\.discard\(tabId\)/);
 });
 
 test('background startup cancellation is based on focused-window workspace events', () => {
@@ -199,4 +201,15 @@ test('normalizes only recognized preference value types and safe URL fallback ch
   assert.equal(normalized.autoUnloadOnStartup, true);
   assert.equal(normalized.loadingUrlFallback, 'skip');
   assert.equal(normalized.overallDeadlineSeconds, policy.DEFAULT_PREFERENCES.overallDeadlineSeconds);
+});
+
+
+test('dedicated settings page validates values, confirms risky changes, and restores defaults', () => {
+  assert.match(optionsSource, /policy\.validatePreferences\(next\)/);
+  assert.match(optionsSource, /window\.confirm/);
+  assert.match(optionsSource, /policy\.DEFAULT_PREFERENCES/);
+  assert.match(optionsSource, /tabSortMode: "eligible-first"/);
+  assert.match(optionsHtml, /Maximum time for one tab attempt/);
+  assert.match(optionsHtml, /When a loading tab has no pending URL/);
+  assert.match(optionsHtml, /Reset to defaults/);
 });

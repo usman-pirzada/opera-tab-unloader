@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Opera GX Workspace Tab Unloader",
-  "version": "0.1.7",
-  "description": "Inspect Opera GX workspaces, unload eligible tabs safely, and optionally auto-unload the startup workspace.",
+  "version": "0.1.8",
+  "description": "Inspect Opera GX workspaces, unload tabs safely, and optionally auto-unload the startup workspace.",
   "permissions": [
     "tabs",
     "storage"
@@ -10,8 +10,32 @@
   "background": {
     "service_worker": "src/background.js"
   },
+  "options_ui": {
+    "page": "options.html",
+    "open_in_tab": true
+  },
+  "icons": {
+    "16": "icons/idle16.png",
+    "32": "icons/idle32.png",
+    "48": "icons/idle48.png",
+    "128": "icons/idle128.png"
+  },
   "action": {
     "default_title": "Workspace Tab Unloader",
-    "default_popup": "popup.html"
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/idle16.png",
+      "32": "icons/idle32.png",
+      "48": "icons/idle48.png"
+    }
+  },
+  "commands": {
+    "bulk-unload-review": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+U",
+        "mac": "Command+Shift+U"
+      },
+      "description": "Review eligible tabs for bulk unloading"
+    }
   }
 }
