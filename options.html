@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workspace Tab Unloader Settings</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main class="options-app">
+    <header class="page-header">
+      <p class="eyebrow">OPERA GX · WORKSPACE TAB UNLOADER</p>
+      <div class="header-row">
+        <div>
+          <h1>Settings</h1>
+          <p class="lede">Configure tab protection, startup automation, timing limits, and status behavior.</p>
+        </div>
+        <button id="reset-button" class="secondary-button" type="button">Reset to defaults</button>
+      </div>
+      <p class="intro-note">Every setting shows its recommended default. Critical settings ask for confirmation before saving. Values are validated before they are stored.</p>
+    </header>
+
+    <form id="settings-form" novalidate>
+      <section class="settings-group" aria-labelledby="protection-title">
+        <div class="group-heading">
+          <h2 id="protection-title">Tab protection</h2>
+          <p>These preferences control which tabs can be considered for unloading.</p>
+        </div>
+        <div class="settings-grid">
+          <label class="setting-card">
+            <span class="setting-title">Skip pinned tabs <span class="default-value">{Default: ON}</span></span>
+            <span class="setting-description">Protects tabs you deliberately pinned. Turn OFF only if you intend to unload pinned pages too.</span>
+            <span class="switch-row"><input id="skipPinnedTabs" type="checkbox"><span>Protect pinned tabs</span></span>
+          </label>
+          <label class="setting-card">
+            <span class="setting-title">Skip audible tabs <span class="default-value">{Default: ON}</span></span>
+            <span class="setting-description">Avoids discarding tabs that report active audio. Turn OFF only if unloading audible pages is acceptable.</span>
+            <span class="switch-row"><input id="skipAudibleTabs" type="checkbox"><span>Protect audible tabs</span></span>
+          </label>
+          <label class="setting-card">
+            <span class="setting-title">Skip non-auto-discardable tabs <span class="default-value">{Default: ON}</span></span>
+            <span class="setting-description">Respects the browser's auto-discard protection flag when that metadata is available.</span>
+            <span class="switch-row"><input id="skipNonAutoDiscardableTabs" type="checkbox"><span>Respect browser protection</span></span>
+          </label>
+          <label class="setting-card critical-card">
+            <span class="setting-title">Skip tabs that are currently loading <span class="default-value">{Default: ON}</span> <span class="critical-label">Caution</span></span>
+            <span class="setting-description">ON waits for a page to finish loading. OFF permits one unload attempt on explicitly reported loading tabs, which may interrupt navigation. Unknown status is always skipped.</span>
+            <span class="switch-row"><input id="skipLoadingTabs" type="checkbox"><span>Protect loading tabs</span></span>
+          </label>
+          <label class="setting-card critical-card">
+            <span class="setting-title">When a loading tab has no pending URL <span class="default-value">{Default: Skip tab}</span> <span class="critical-label">Advanced</span></span>
+            <span class="setting-description">The pending URL identifies the navigation in progress. If it is missing, the safest choice is to skip. Falling back to the last committed URL can classify an old page instead of the destination.</span>
+            <select id="loadingUrlFallback" class="setting-input">
+              <option value="skip">Skip this tab (recommended)</option>
+              <option value="lastCommitted">Use last committed URL (advanced)</option>
+            </select>
+          </label>
+        </div>
+      </section>
+
+      <section class="settings-group" aria-labelledby="startup-title">
+        <div class="group-heading">
+          <h2 id="startup-title">Startup and time limits</h2>
+          <p>Discovery, loading waits, and tab attempts all share the overall deadline. If it expires, no new unload attempt starts.</p>
+        </div>
+        <div class="settings-grid">
+          <label class="setting-card critical-card">
+            <span class="setting-title">Auto-unload eligible tabs on startup <span class="default-value">{Default: OFF}</span> <span class="critical-label">Caution</span></span>
+            <span class="setting-description">Automatically applies the current tab policy to the workspace captured at startup. Switching away permanently cancels that startup run; the operation never retargets to the new workspace.</span>
+            <span class="switch-row"><input id="autoUnloadOnStartup" type="checkbox"><span>Enable startup auto-unload</span></span>
+          </label>
+          <label class="setting-card">
+            <span class="setting-title">Startup discovery window <span class="default-value">{Default: 8 seconds}</span></span>
+            <span class="setting-description">How long startup waits to collect tabs restored shortly after the startup event. Range: 2–30 whole seconds.</span>
+            <input id="startupDiscoverySeconds" class="setting-input" type="number" min="2" max="30" step="1" inputmode="numeric" required>
+          </label>
+          <label class="setting-card">
+            <span class="setting-title">Maximum wait for loading candidates <span class="default-value">{Default: 20 seconds}</span></span>
+            <span class="setting-description">When loading-tab protection is ON, how long to wait for eligible loading tabs to finish. Range: 0–120 whole seconds. The overall deadline may end this wait earlier.</span>
+            <input id="startupLoadingWaitSeconds" class="setting-input" type="number" min="0" max="120" step="1" inputmode="numeric" required>
+          </label>
+          <label class="setting-card critical-card">
+            <span class="setting-title">Overall operation deadline <span class="default-value">{Default: 60 seconds}</span> <span class="critical-label">Safety limit</span></span>
+            <span class="setting-description">Hard limit for a startup run or manual bulk operation, including preparation and the unload queue. Range: 10–300 whole seconds. An in-flight native request cannot be retroactively cancelled.</span>
+            <input id="overallDeadlineSeconds" class="setting-input" type="number" min="10" max="300" step="1" inputmode="numeric" required>
+          </label>
+          <label class="setting-card critical-card">
+            <span class="setting-title">Maximum time for one tab attempt <span class="default-value">{Default: 5 seconds}</span> <span class="critical-label">Safety limit</span></span>
+            <span class="setting-description">Budget for workspace checks, eligibility rechecks, discard, and verification for one candidate. Range: 2–30 whole seconds. If a discard request itself times out, its outcome is marked uncertain and later unloads are blocked until the request settles.</span>
+            <input id="perTabTimeoutSeconds" class="setting-input" type="number" min="2" max="30" step="1" inputmode="numeric" required>
+          </label>
+        </div>
+        <p class="relationship-note">Validation rule: startup discovery plus loading wait must fit inside the overall deadline, and the per-tab time budget cannot exceed the overall deadline.</p>
+      </section>
+
+      <section class="settings-group" aria-labelledby="interface-title">
+        <div class="group-heading">
+          <h2 id="interface-title">Interface and shortcuts</h2>
+          <p>These options do not change the tab eligibility policy.</p>
+        </div>
+        <div class="settings-grid">
+          <label class="setting-card">
+            <span class="setting-title">Toolbar status indicator <span class="default-value">{Default: ON}</span></span>
+            <span class="setting-description">Shows grey when idle, blue while an unload operation is working, green after success, and red after an error or cancellation. The indicator includes manual as well as startup operations.</span>
+            <span class="switch-row"><input id="showStatusIndicator" type="checkbox"><span>Show colored icon status</span></span>
+          </label>
+          <label class="setting-card">
+            <span class="setting-title">Tab list sorting <span class="default-value">{Default: Eligible first}</span></span>
+            <span class="setting-description">Controls the order of rows in the popup. It does not change which tabs are eligible.</span>
+            <select id="tabSortMode" class="setting-input">
+              <option value="eligible-first">Eligible first</option>
+              <option value="eligible-last">Eligible last</option>
+              <option value="tab-order">Browser tab order</option>
+            </select>
+          </label>
+          <div class="setting-card shortcut-card">
+            <span class="setting-title">Keyboard shortcut <span class="default-value">{Suggested: Ctrl+Shift+U}</span></span>
+            <p class="setting-description">Opens the popup and starts a bulk review. You must still confirm the candidate list before any tabs are unloaded.</p>
+            <p class="shortcut-note">Change the shortcut in <code>opera://extensions/shortcuts</code>. The browser can reserve shortcuts for its own commands.</p>
+          </div>
+        </div>
+      </section>
+
+      <div id="validation-error" class="feedback error-feedback" role="alert" hidden></div>
+      <div id="settings-status" class="feedback" role="status" aria-live="polite">Loading saved settings…</div>
+      <div class="form-actions">
+        <button id="save-button" class="primary-button" type="submit">Save settings</button>
+        <button id="reset-bottom-button" class="secondary-button" type="button">Reset to defaults</button>
+      </div>
+    </form>
+    <footer class="page-footer">Local-only settings. No website scripts, host permissions, or network requests are used.</footer>
+  </main>
+  <script src="src/tab-policy.js"></script>
+  <script src="src/options.js"></script>
+</body>
+</html>

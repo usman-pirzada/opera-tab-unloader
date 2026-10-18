@@ -23,7 +23,8 @@
     status: $("#status"),
     retry: $("#retry-button"),
     refresh: $("#refresh-button"),
-    startupStatus: $("#startup-status")
+    startupStatus: $("#startup-status"),
+    openSettings: $("#open-settings-button")
   };
 
   let preferences = { ...policy.DEFAULT_PREFERENCES };
@@ -37,6 +38,9 @@
   let refreshSequence = 0;
   let refreshTimer = null;
   let refreshQueued = false;
+  let popupReady = false;
+  let shortcutReviewPending = false;
+  let shortcutReviewInProgress = false;
 
   function setStatus(message) {
     ui.status.textContent = message;
@@ -382,7 +386,12 @@
     });
     if (chrome.storage && chrome.storage.onChanged && typeof chrome.storage.onChanged.addListener === "function") {
       chrome.storage.onChanged.addListener(function (changes, areaName) {
-        if (areaName === "local" && changes.startupStatus) renderStartupStatus(changes.startupStatus.newValue);
+        if (areaName !== "local") return;
+        if (changes.startupStatus) renderStartupStatus(changes.startupStatus.newValue);
+        if (changes.bulkReviewRequest && changes.bulkReviewRequest.newValue) {
+          shortcutReviewPending = true;
+          maybeHandleShortcutReviewRequest().catch(function () {});
+        }
       });
     }
   }
@@ -405,6 +414,40 @@
     } catch (_error) {
       renderStartupStatus(null);
     }
+  }
+
+
+  async function consumeShortcutReviewRequest() {
+    try {
+      const stored = await chrome.storage.local.get("bulkReviewRequest");
+      const request = stored.bulkReviewRequest;
+      if (!request || !Number.isFinite(request.createdAt)) return false;
+      await chrome.storage.local.remove("bulkReviewRequest");
+      if (Date.now() - request.createdAt > 30000 || Date.now() < request.createdAt) {
+        setStatus("The keyboard bulk-review request expired. Start it again with the shortcut.");
+        return false;
+      }
+      return true;
+    } catch (_error) {
+      return false;
+    }
+  }
+
+  async function maybeHandleShortcutReviewRequest() {
+    if (!popupReady || shortcutReviewInProgress) return;
+    if (busy || reviewingBulk || pendingBulk) {
+      shortcutReviewPending = true;
+      return;
+    }
+    shortcutReviewInProgress = true;
+    let requested = shortcutReviewPending;
+    shortcutReviewPending = false;
+    try {
+      requested = (await consumeShortcutReviewRequest()) || requested;
+    } finally {
+      shortcutReviewInProgress = false;
+    }
+    if (requested) await beginBulkReview();
   }
 
   async function requestBackground(type, payload) {
@@ -530,38 +573,6 @@
     }
   }
 
-  function enableSafetyPreferenceButtons() {
-    document.querySelectorAll(".preference-toggle[data-pref]").forEach((button) => {
-      const key = button.dataset.pref;
-      renderPreferenceToggle(button, preferences[key] === true);
-      button.addEventListener("click", async () => {
-        if (busy) return;
-        const enabled = !(preferences[key] === true);
-        preferences = { ...preferences, [key]: enabled };
-        renderPreferenceToggle(button, enabled);
-        clearBulkConfirmation();
-        updateControls();
-        let saved = true;
-        try {
-          await chrome.storage.local.set({ [key]: enabled });
-        } catch (_error) {
-          saved = false;
-        }
-        await refresh({ clearPending: false });
-        if (!saved) {
-          setStatus(key === "autoUnloadOnStartup"
-            ? "Could not save startup preference. The toggle is temporary for this popup; startup automation will not use it."
-            : "Could not save that preference. The change remains active for this popup session.");
-        } else if (key === "autoUnloadOnStartup") {
-          renderStartupStatus(null);
-          setStatus(enabled
-            ? "Startup auto-unload is enabled for the next browser startup."
-            : "Startup auto-unload is disabled.");
-        }
-      });
-    });
-  }
-
   ui.workspaceSelect.addEventListener("change", async () => {
     if (busy) return;
     selectedWorkspaceId = normalizeId(ui.workspaceSelect.value);
@@ -585,6 +596,11 @@
     }
   });
 
+  ui.openSettings.addEventListener("click", () => {
+    chrome.runtime.openOptionsPage().catch((error) => {
+      setStatus(error instanceof Error ? error.message : "Could not open Settings. Use opera://extensions and choose Extension options.");
+    });
+  });
   ui.retry.addEventListener("click", () => refresh());
   ui.refresh.addEventListener("click", () => refresh());
   ui.unloadAll.addEventListener("click", beginBulkReview);
@@ -598,10 +614,7 @@
     const keys = [...Object.keys(policy.DEFAULT_PREFERENCES), "tabSortMode"];
     try {
       const stored = await chrome.storage.local.get(keys);
-      preferences = { ...policy.DEFAULT_PREFERENCES };
-      for (const key of Object.keys(policy.DEFAULT_PREFERENCES)) {
-        if (typeof stored[key] === "boolean") preferences[key] = stored[key];
-      }
+      preferences = policy.normalizePreferences(stored);
       if (["eligible-first", "eligible-last", "tab-order"].includes(stored.tabSortMode)) {
         tabSortMode = stored.tabSortMode;
       }
@@ -610,7 +623,6 @@
       tabSortMode = "eligible-first";
       setStatus("Saved preferences could not be loaded. Conservative defaults are active for this session.");
     }
-    enableSafetyPreferenceButtons();
     ui.tabSortSelect.value = tabSortMode;
   }
 
@@ -626,5 +638,7 @@
     // The selector always starts with the current workspace whenever the popup opens.
     selectedWorkspaceId = null;
     await refresh();
+    popupReady = true;
+    await maybeHandleShortcutReviewRequest();
   })();
 })();
