@@ -1085,10 +1085,41 @@
       return null;
     }
 
+    async function restoreActionStatus() {
+      let stored = {};
+      try {
+        stored = await api.storage.local.get(["operationStatus", "showStatusIndicator"]);
+      } catch (_error) {}
+      statusEnabled = stored.showStatusIndicator !== false;
+      const previous = stored.operationStatus;
+      if (!previous || typeof previous.state !== "string") {
+        await setActionStatus("idle", "Ready.");
+        return;
+      }
+      if (previous.state === "error") {
+        await setActionStatus("error", previous.message || "The previous bulk operation ended with an error.");
+        return;
+      }
+      if (previous.state === "success") {
+        const previousTime = Date.parse(previous.time || "");
+        if (Number.isFinite(previousTime) && Date.now() - previousTime < 6500) {
+          await setActionStatus("success", previous.message || "The last bulk operation succeeded.");
+        } else {
+          await setActionStatus("idle", "Ready.");
+        }
+        return;
+      }
+      if (previous.state === "working") {
+        await setActionStatus("error", "A previous bulk operation did not record a final result. Check the popup before retrying.");
+        return;
+      }
+      await setActionStatus("idle", "Ready.");
+    }
+
     function install() {
       if (api.runtime && api.runtime.onMessage && api.runtime.onMessage.addListener) {
         api.runtime.onMessage.addListener(function (message, _sender, sendResponse) {
-          if (!message || !["UNLOAD_ONE", "UNLOAD_BATCH", "GET_STARTUP_STATUS"].includes(message.type)) return false;
+          if (!message || !["UNLOAD_ONE", "UNLOAD_BATCH", "UNLOAD_ADAPTIVE", "POPUP_OPENED", "GET_STARTUP_STATUS"].includes(message.type)) return false;
           Promise.resolve(handleMessage(message)).then(function (result) {
             sendResponse({ ok: true, result: result });
           }).catch(function (error) {
@@ -1104,7 +1135,7 @@
         api.storage.onChanged.addListener(function (changes, areaName) {
           if (areaName === "local" && changes.showStatusIndicator) {
             statusEnabled = changes.showStatusIndicator.newValue !== false;
-            setActionStatus("idle", statusEnabled ? "Ready." : "Status indicator disabled.").catch(function () {});
+            renderCurrentActionStatus().catch(function () {});
           }
         });
       }
@@ -1129,7 +1160,7 @@
           });
         });
       }
-      setActionStatus("idle", "Ready.").catch(function () {});
+      restoreActionStatus().catch(function () {});
       if (api.tabs && api.tabs.onActivated && api.tabs.onActivated.addListener) {
         api.tabs.onActivated.addListener(function (info) { onTabActivated(info).catch(function () {}); });
       }
@@ -1138,16 +1169,19 @@
       if (api.tabs && api.tabs.onRemoved && api.tabs.onRemoved.addListener) api.tabs.onRemoved.addListener(onTabRemoved);
       if (api.tabs && api.tabs.onReplaced && api.tabs.onReplaced.addListener) {
         api.tabs.onReplaced.addListener(function (addedId, removedId) {
-          const run = startupRun;
-          if (!run || run.cancelled || !run.candidates.has(removedId)) return;
-          run.candidates.delete(removedId);
-          if (run.collecting) {
-            api.tabs.get(addedId).then(function (tab) { addCandidate(run, tab); }).catch(function () {});
-          }
-          // Do not enqueue a replacement after startup's candidate set is frozen.
-          run.updateGeneration += 1;
-          run.lastActivityAt = Date.now();
-          if (run.phase === "waiting-load") wakeRun(run);
+          getActiveRuns().forEach(function (run) {
+            if (!run.candidates.has(removedId)) return;
+            run.candidates.delete(removedId);
+            if (run.collecting) {
+              api.tabs.get(addedId).then(function (tab) {
+                const wasCandidate = run.candidates.has(addedId);
+                addCandidate(run, tab);
+                if (!wasCandidate && run.candidates.has(addedId)) signalRunActivity(run);
+              }).catch(function () {});
+            }
+            // Do not treat a replacement after collection has ended as a new candidate.
+            signalRunActivity(run);
+          });
         });
       }
     }
