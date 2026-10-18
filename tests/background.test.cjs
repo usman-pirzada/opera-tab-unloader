@@ -476,3 +476,43 @@ test('adaptive bulk unload permanently stops when the active workspace changes',
   assert.equal(result.state, 'cancelled');
   assert.match(result.message, /workspace changed/i);
 });
+
+test('formats browser API errors without throwing from the error path', async () => {
+  const browser = mockBrowser([
+    tab({ id: 1, active: true }),
+    tab({ id: 2, title: 'Target tab' })
+  ]);
+  browser.api.tabs.query = async () => {
+    throw new Error('simulated tab query failure');
+  };
+  const controller = createController(browser.api, policy);
+  const result = await controller.inspectAndDiscard(
+    2,
+    'A',
+    { ...policy.DEFAULT_PREFERENCES, perTabTimeoutSeconds: 2 },
+    true,
+    null
+  );
+  assert.equal(result.state, 'aborted');
+  assert.match(result.message, /simulated tab query failure/);
+  assert.deepEqual(browser.calls.discard, []);
+});
+
+test('startup reports workspace lookup failures without crashing its catch path', async () => {
+  const browser = mockBrowser([
+    tab({ id: 1, active: true }),
+    tab({ id: 2, title: 'Must not unload' })
+  ], {
+    autoUnloadOnStartup: true,
+    ...policy.DEFAULT_PREFERENCES
+  });
+  browser.api.tabs.query = async () => {
+    throw new Error('simulated startup query failure');
+  };
+  const controller = createController(browser.api, policy);
+  await controller.runStartupAutoUnload();
+
+  assert.equal(browser.store.startupStatus.state, 'failed');
+  assert.match(browser.store.startupStatus.message, /simulated startup query failure/);
+  assert.deepEqual(browser.calls.discard, []);
+});

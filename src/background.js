@@ -27,6 +27,23 @@
       return error;
     }
 
+    function errText(error) {
+      if (error instanceof Error && typeof error.message === "string" && error.message.trim()) {
+        return error.message;
+      }
+      if (typeof error === "string" && error.trim()) return error;
+      if (error === null || error === undefined) return "Unknown error.";
+      try {
+        const serialized = JSON.stringify(error);
+        if (serialized && serialized !== "{}") return serialized;
+      } catch (_error) {}
+      try {
+        return String(error);
+      } catch (_error) {
+        return "Unknown error.";
+      }
+    }
+
     async function awaitWithinDeadline(promise, deadlineAt, operation) {
       if (!Number.isFinite(deadlineAt)) return await promise;
       const remaining = deadlineAt - Date.now();
