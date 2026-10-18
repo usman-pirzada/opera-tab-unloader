@@ -503,8 +503,8 @@ test('startup reports workspace lookup failures without crashing its catch path'
     tab({ id: 1, active: true }),
     tab({ id: 2, title: 'Must not unload' })
   ], {
-    autoUnloadOnStartup: true,
-    ...policy.DEFAULT_PREFERENCES
+    ...policy.DEFAULT_PREFERENCES,
+    autoUnloadOnStartup: true
   });
   browser.api.tabs.query = async () => {
     throw new Error('simulated startup query failure');

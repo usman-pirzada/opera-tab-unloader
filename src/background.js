@@ -44,6 +44,17 @@
       }
     }
 
+    function normalizeId(value) {
+      if (typeof value === "number" && Number.isFinite(value)) return String(value);
+      if (typeof value === "string" && value.trim()) return value.trim();
+      return null;
+    }
+
+    function sameWorkspace(targetWorkspaceId, currentWorkspaceId) {
+      return Boolean(tabPolicy && typeof tabPolicy.isSameWorkspace === "function" &&
+        tabPolicy.isSameWorkspace(targetWorkspaceId, currentWorkspaceId));
+    }
+
     async function awaitWithinDeadline(promise, deadlineAt, operation) {
       if (!Number.isFinite(deadlineAt)) return await promise;
       const remaining = deadlineAt - Date.now();
