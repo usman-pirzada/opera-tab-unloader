@@ -223,10 +223,15 @@ test('dedicated settings page validates values, confirms risky changes, and rest
   assert.match(optionsSource, /savedSortMode = "eligible-first"/);
   assert.match(optionsSource, /fillControls\(savedPreferences, savedSortMode\)/);
   assert.match(optionsHtml, /Maximum time for one tab attempt/);
-  assert.match(optionsHtml, /When a loading tab has no pending URL/);
+  assert.match(optionsHtml, /Missing pending URL fallback/);
+  assert.match(optionsHtml, /startupSkipLoadingTabs/);
+  assert.match(optionsHtml, /bulkUnloadMode/);
+  assert.match(optionsHtml, /confirmBulkUnload/);
   assert.match(optionsHtml, /Reset to defaults/);
   assert.match(optionsHtml, /settings-nav/);
+  assert.match(optionsSource, /setupScrollNavigation/);
   assert.match(optionsHtml, /startupQuietPeriodSeconds/);
+  assert.match(optionsHtml, /Manual adaptive scan window/);
   assert.doesNotMatch(optionsHtml, /Save settings/);
 });
 

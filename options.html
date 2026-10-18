@@ -36,81 +36,146 @@
       <section class="settings-group" aria-labelledby="protection-title">
         <div class="group-heading">
           <h2 id="protection-title">Tab protection</h2>
-          <p>These preferences control which tabs can be considered for unloading.</p>
+          <p>Manual unloading and startup auto-unload use separate safety profiles. Changing one profile will not silently change the other.</p>
         </div>
-        <div class="settings-grid">
-          <label class="setting-card">
-            <span class="setting-title">Skip pinned tabs <span class="default-value">{Default: ON}</span></span>
-            <span class="setting-description">Protects tabs you deliberately pinned. Turn OFF only if you intend to unload pinned pages too.</span>
-            <span class="switch-row"><input id="skipPinnedTabs" type="checkbox"><span>Protect pinned tabs</span></span>
-          </label>
-          <label class="setting-card">
-            <span class="setting-title">Skip audible tabs <span class="default-value">{Default: ON}</span></span>
-            <span class="setting-description">Avoids discarding tabs that report active audio. Turn OFF only if unloading audible pages is acceptable.</span>
-            <span class="switch-row"><input id="skipAudibleTabs" type="checkbox"><span>Protect audible tabs</span></span>
-          </label>
-          <label class="setting-card">
-            <span class="setting-title">Skip non-auto-discardable tabs <span class="default-value">{Default: ON}</span></span>
-            <span class="setting-description">Respects the browser's auto-discard protection flag when that metadata is available.</span>
-            <span class="switch-row"><input id="skipNonAutoDiscardableTabs" type="checkbox"><span>Respect browser protection</span></span>
-          </label>
-          <label class="setting-card critical-card">
-            <span class="setting-title">Skip tabs that are currently loading <span class="default-value">{Default: ON}</span> <span class="critical-label">Caution</span></span>
-            <span class="setting-description">ON waits for a page to finish loading. OFF permits one unload attempt on explicitly reported loading tabs, which may interrupt navigation. Unknown status is always skipped.</span>
-            <span class="switch-row"><input id="skipLoadingTabs" type="checkbox"><span>Protect loading tabs</span></span>
-          </label>
-          <label class="setting-card critical-card">
-            <span class="setting-title">When a loading tab has no pending URL <span class="default-value">{Default: Skip tab}</span> <span class="critical-label">Advanced</span></span>
-            <span class="setting-description">The pending URL identifies the navigation in progress. If it is missing, the safest choice is to skip. Falling back to the last committed URL can classify an old page instead of the destination.</span>
-            <select id="loadingUrlFallback" class="setting-input">
-              <option value="skip">Skip this tab (recommended)</option>
-              <option value="lastCommitted">Use last committed URL (advanced)</option>
+
+        <div class="settings-grid behavior-grid">
+          <label class="setting-card mode-card">
+            <span class="setting-title">Bulk unload behavior <span class="default-value">{Default: Adaptive scanning}</span></span>
+            <span class="setting-description">Adaptive scanning unloads tabs that are eligible now, then keeps taking fresh snapshots during a bounded window so tabs that finish loading later can also be handled. It does not rely on a fixed eligible count.</span>
+            <select id="bulkUnloadMode" class="setting-input">
+              <option value="adaptive">Adaptive scanning (recommended)</option>
+              <option value="exact-review">Exact list review (advanced)</option>
             </select>
           </label>
+          <div id="exact-review-warning" class="setting-card critical-card mode-warning" hidden>
+            <span class="setting-title">Exact list review mode <span class="critical-label">Advanced</span></span>
+            <p class="setting-description">Benefit: review the exact candidate list before it runs. Trade-off: if Opera changes which tabs are eligible before confirmation, the operation cancels instead of adapting. This is useful when the tab set is stable, but confusing during session restoration when loading tabs become eligible at different times.</p>
+          </div>
+          <label class="setting-card critical-card">
+            <span class="setting-title">Confirm before bulk unloading <span class="default-value">{Default: ON}</span> <span class="critical-label">Caution</span></span>
+            <span class="setting-description">ON asks before each manual bulk run starts. OFF starts the selected bulk mode immediately after you click the button. Adaptive mode can unload tabs that become eligible during its scan window, so disabling confirmation means there is no second chance to cancel before it starts.</span>
+            <span class="switch-row"><input id="confirmBulkUnload" type="checkbox"><span>Ask before starting a bulk unload</span></span>
+          </label>
+        </div>
+
+        <div class="profile-block">
+          <h3>Manual unloading profile <span class="profile-tag">Popup and individual unloads</span></h3>
+          <p class="profile-description">These protections apply when you manually unload a single tab or start a bulk unload from the popup or keyboard shortcut.</p>
+          <div class="settings-grid">
+            <label class="setting-card">
+              <span class="setting-title">Skip pinned tabs <span class="default-value">{Default: ON}</span></span>
+              <span class="setting-description">Protects tabs you deliberately pinned. Turn OFF only if you intend to unload pinned pages too.</span>
+              <span class="switch-row"><input id="skipPinnedTabs" type="checkbox"><span>Protect pinned tabs</span></span>
+            </label>
+            <label class="setting-card">
+              <span class="setting-title">Skip audible tabs <span class="default-value">{Default: ON}</span></span>
+              <span class="setting-description">Avoids discarding tabs that report active audio. Turn OFF only if interrupting media is acceptable.</span>
+              <span class="switch-row"><input id="skipAudibleTabs" type="checkbox"><span>Protect audible tabs</span></span>
+            </label>
+            <label class="setting-card">
+              <span class="setting-title">Skip non-auto-discardable tabs <span class="default-value">{Default: ON}</span></span>
+              <span class="setting-description">Respects the browser's auto-discard protection flag when that metadata is available.</span>
+              <span class="switch-row"><input id="skipNonAutoDiscardableTabs" type="checkbox"><span>Respect browser protection</span></span>
+            </label>
+            <label class="setting-card critical-card">
+              <span class="setting-title">Skip tabs that are currently loading <span class="default-value">{Default: ON}</span> <span class="critical-label">Caution</span></span>
+              <span class="setting-description">ON protects in-progress navigation. OFF permits one attempt on explicitly reported loading tabs and may interrupt navigation. Unknown status is still skipped.</span>
+              <span class="switch-row"><input id="skipLoadingTabs" type="checkbox"><span>Protect loading tabs</span></span>
+            </label>
+            <label class="setting-card critical-card">
+              <span class="setting-title">Missing pending URL fallback <span class="default-value">{Default: Skip tab}</span> <span class="critical-label">Advanced</span></span>
+              <span class="setting-description">If the browser does not expose the destination of a loading tab, skipping avoids classifying it by an old URL. Falling back to the last committed URL can misidentify an in-progress navigation.</span>
+              <select id="loadingUrlFallback" class="setting-input">
+                <option value="skip">Skip this tab (recommended)</option>
+                <option value="lastCommitted">Use last committed URL (advanced)</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div class="profile-block">
+          <h3>Startup auto-unload profile <span class="profile-tag">Automatic only</span></h3>
+          <p class="profile-description">These safeguards apply only to the automatic startup scan. You can, for example, allow loading-tab attempts during startup while keeping loading protection ON for manual unloading.</p>
+          <div class="settings-grid">
+            <label class="setting-card">
+              <span class="setting-title">Skip pinned tabs <span class="default-value">{Default: ON}</span></span>
+              <span class="setting-description">Keeps pinned tabs protected during startup even if the manual profile allows them.</span>
+              <span class="switch-row"><input id="startupSkipPinnedTabs" type="checkbox"><span>Protect pinned tabs at startup</span></span>
+            </label>
+            <label class="setting-card">
+              <span class="setting-title">Skip audible tabs <span class="default-value">{Default: ON}</span></span>
+              <span class="setting-description">Avoids discarding tabs that report active audio during startup.</span>
+              <span class="switch-row"><input id="startupSkipAudibleTabs" type="checkbox"><span>Protect audible tabs at startup</span></span>
+            </label>
+            <label class="setting-card">
+              <span class="setting-title">Skip non-auto-discardable tabs <span class="default-value">{Default: ON}</span></span>
+              <span class="setting-description">Respects the browser's auto-discard protection flag during startup.</span>
+              <span class="switch-row"><input id="startupSkipNonAutoDiscardableTabs" type="checkbox"><span>Respect browser protection at startup</span></span>
+            </label>
+            <label class="setting-card critical-card">
+              <span class="setting-title">Skip tabs that are currently loading <span class="default-value">{Default: ON}</span> <span class="critical-label">Caution</span></span>
+              <span class="setting-description">ON leaves loading tabs protected until they become complete. OFF allows attempts while loading if the destination URL can be classified safely. This can interrupt navigation.</span>
+              <span class="switch-row"><input id="startupSkipLoadingTabs" type="checkbox"><span>Protect loading tabs at startup</span></span>
+            </label>
+            <label class="setting-card critical-card">
+              <span class="setting-title">Missing pending URL fallback <span class="default-value">{Default: Skip tab}</span> <span class="critical-label">Advanced</span></span>
+              <span class="setting-description">Used only when startup loading protection is OFF and the browser does not report a pending destination.</span>
+              <select id="startupLoadingUrlFallback" class="setting-input">
+                <option value="skip">Skip this tab (recommended)</option>
+                <option value="lastCommitted">Use last committed URL (advanced)</option>
+              </select>
+            </label>
+          </div>
         </div>
       </section>
 
-      <section class="settings-group" aria-labelledby="startup-title">
+<section class="settings-group" aria-labelledby="startup-title">
         <div class="group-heading">
           <h2 id="startup-title">Startup and time limits</h2>
-          <p>Discovery, loading waits, and tab attempts all share the overall deadline. If it expires, no new unload attempt starts.</p>
+          <p>Both adaptive modes repeatedly refresh the tab list while their bounded scan window is active. The hard overall deadline always wins.</p>
         </div>
         <div class="settings-grid">
           <label class="setting-card critical-card">
             <span class="setting-title">Auto-unload eligible tabs on startup <span class="default-value">{Default: OFF}</span> <span class="critical-label">Caution</span></span>
-            <span class="setting-description">Automatically applies the current tab policy to the workspace captured at startup. Switching away permanently cancels that startup run; the operation never retargets to the new workspace.</span>
+            <span class="setting-description">Automatically applies the startup protection profile to the workspace current at startup. It unloads eligible tabs as they appear, keeps rescanning during the monitoring window, and permanently stops if the current workspace changes.</span>
             <span class="switch-row"><input id="autoUnloadOnStartup" type="checkbox"><span>Enable startup auto-unload</span></span>
           </label>
           <label class="setting-card">
-            <span class="setting-title">Startup discovery window <span class="default-value">{Default: 8 seconds}</span></span>
-            <span class="setting-description">How long startup waits to collect tabs restored shortly after the startup event. Range: 2–30 whole seconds.</span>
-            <input id="startupDiscoverySeconds" class="setting-input" type="number" min="2" max="30" step="1" inputmode="numeric" required>
+            <span class="setting-title">Manual adaptive scan window <span class="default-value">{Default: 45 seconds}</span></span>
+            <span class="setting-description">How long a manual adaptive bulk run keeps looking for tabs that become eligible after the first scan. Range: 5–180 whole seconds. Eligible tabs are unloaded during the window, not just at the end.</span>
+            <input id="adaptiveBulkScanSeconds" class="setting-input" type="number" min="5" max="180" step="1" inputmode="numeric" required>
           </label>
           <label class="setting-card">
-            <span class="setting-title">Maximum wait for loading candidates <span class="default-value">{Default: 20 seconds}</span></span>
-            <span class="setting-description">When loading-tab protection is ON, how long to wait for eligible loading tabs to finish. Range: 0–120 whole seconds. Zero means do not wait. The overall deadline may end this wait earlier.</span>
+            <span class="setting-title">Startup monitoring window <span class="default-value">{Default: 90 seconds}</span></span>
+            <span class="setting-description">From startup, repeatedly scan the captured workspace and unload each newly eligible tab. This is the main period for catching tabs Opera restores gradually. Range: 10–240 whole seconds.</span>
+            <input id="startupDiscoverySeconds" class="setting-input" type="number" min="10" max="240" step="1" inputmode="numeric" required>
+          </label>
+          <label class="setting-card">
+            <span class="setting-title">Extra startup grace for loading tabs <span class="default-value">{Default: 20 seconds}</span></span>
+            <span class="setting-description">If protected tabs are still loading when the monitoring window ends, keep watching for up to this many extra seconds. Eligible tabs that finish during the grace period are still unloaded. Range: 0–120 whole seconds.</span>
             <input id="startupLoadingWaitSeconds" class="setting-input" type="number" min="0" max="120" step="1" inputmode="numeric" required>
           </label>
           <label class="setting-card">
-            <span class="setting-title">Quiet period <span class="default-value">{Default: 2 seconds}</span></span>
-            <span class="setting-description">During startup settling, how long relevant tab activity must be quiet before the extension proceeds. Range: 1–10 whole seconds.</span>
+            <span class="setting-title">Wait between empty scans <span class="default-value">{Default: 2 seconds}</span></span>
+            <span class="setting-description">When a fresh scan finds no eligible tabs, wait this long before checking again if no tab event arrives. New or updated tabs trigger another scan sooner. This does not delay the first scan or unload attempts for tabs already eligible. Range: 1–10 whole seconds.</span>
             <input id="startupQuietPeriodSeconds" class="setting-input" type="number" min="1" max="10" step="1" inputmode="numeric" required>
           </label>
           <label class="setting-card critical-card">
-            <span class="setting-title">Overall operation deadline <span class="default-value">{Default: 60 seconds}</span> <span class="critical-label">Safety limit</span></span>
-            <span class="setting-description">Hard limit for a startup run or manual bulk operation, including preparation and the unload queue. Range: 10–300 whole seconds. Discovery, loading wait, and at least one per-tab attempt must fit inside this limit. An in-flight native request cannot be retroactively cancelled.</span>
-            <input id="overallDeadlineSeconds" class="setting-input" type="number" min="10" max="300" step="1" inputmode="numeric" required>
+            <span class="setting-title">Overall operation deadline <span class="default-value">{Default: 180 seconds}</span> <span class="critical-label">Safety limit</span></span>
+            <span class="setting-description">Hard stop for manual and startup bulk operations, including preparation and tab attempts. Range: 30–300 whole seconds. No new unload starts after this deadline; an already-issued native request cannot be cancelled retroactively.</span>
+            <input id="overallDeadlineSeconds" class="setting-input" type="number" min="30" max="300" step="1" inputmode="numeric" required>
           </label>
           <label class="setting-card critical-card">
             <span class="setting-title">Maximum time for one tab attempt <span class="default-value">{Default: 5 seconds}</span> <span class="critical-label">Safety limit</span></span>
-            <span class="setting-description">Budget for workspace checks, eligibility rechecks, discard, and verification for one candidate. Range: 2–30 whole seconds. If a discard request itself times out, its outcome is marked uncertain and later unloads are blocked until the request settles.</span>
+            <span class="setting-description">Time budget for workspace checks, eligibility rechecks, discard, and verification. Range: 2–30 whole seconds. If the discard request times out, its outcome is uncertain and later unloads stop until it settles.</span>
             <input id="perTabTimeoutSeconds" class="setting-input" type="number" min="2" max="30" step="1" inputmode="numeric" required>
           </label>
         </div>
-        <p class="relationship-note">Validation rule: startup discovery, loading wait, quiet period, and at least one per-tab attempt must fit inside the overall deadline. When a value conflicts with another setting, the extension will explain what needs adjustment instead of saving an impossible combination.</p>
+        <p class="relationship-note">Validation checks both operation budgets: the startup monitoring window, optional loading grace, empty-scan interval, and one tab attempt must fit inside the overall deadline; the manual adaptive scan window plus one tab attempt must also fit. Impossible combinations are rejected instead of silently saved.</p>
       </section>
 
-      <section class="settings-group" aria-labelledby="interface-title">
+<section class="settings-group" aria-labelledby="interface-title">
         <div class="group-heading">
           <h2 id="interface-title">Interface and shortcuts</h2>
           <p>These options do not change the tab eligibility policy.</p>
@@ -118,7 +183,7 @@
         <div class="settings-grid">
           <label class="setting-card">
             <span class="setting-title">Toolbar status indicator <span class="default-value">{Default: ON}</span></span>
-            <span class="setting-description">Shows grey when idle, blue while an unload operation is working, green after success, and red after an error or cancellation. The indicator includes manual as well as startup operations.</span>
+            <span class="setting-description">No dot when idle; blinking blue during manual bulk or startup unloading; green briefly after success; red persists after an error or cancellation until the next bulk/startup operation. Individual tab unloads do not change the dot. Opening the popup clears green immediately.</span>
             <span class="switch-row"><input id="showStatusIndicator" type="checkbox"><span>Show colored icon status</span></span>
           </label>
           <label class="setting-card">
@@ -132,7 +197,7 @@
           </label>
           <div class="setting-card shortcut-card">
             <span class="setting-title">Keyboard shortcut <span class="default-value">{Suggested: Ctrl+Shift+U}</span></span>
-            <p class="setting-description">Opens the popup and starts a bulk review. You must still confirm the candidate list before any tabs are unloaded.</p>
+            <p class="setting-description">Opens the popup and starts the selected bulk mode. In adaptive mode, confirmation is optional according to the setting above; exact review mode uses a fixed candidate list and may cancel if the list changes.</p>
             <p class="shortcut-note">Change the shortcut in <code>opera://extensions/shortcuts</code>. The browser can reserve shortcuts for its own commands.</p>
           </div>
         </div>

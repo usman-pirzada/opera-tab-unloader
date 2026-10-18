@@ -4,6 +4,7 @@
   const policy = window.TabPolicy;
   const $ = (selector) => document.querySelector(selector);
   const numericKeys = [
+    "adaptiveBulkScanSeconds",
     "startupDiscoverySeconds",
     "startupLoadingWaitSeconds",
     "startupQuietPeriodSeconds",
@@ -15,7 +16,12 @@
     "skipAudibleTabs",
     "skipNonAutoDiscardableTabs",
     "skipLoadingTabs",
+    "startupSkipPinnedTabs",
+    "startupSkipAudibleTabs",
+    "startupSkipNonAutoDiscardableTabs",
+    "startupSkipLoadingTabs",
     "autoUnloadOnStartup",
+    "confirmBulkUnload",
     "showStatusIndicator"
   ];
   const sortModes = ["eligible-first", "eligible-last", "tab-order"];
@@ -33,6 +39,8 @@
     confirmCancel: $("#confirm-cancel"),
     confirmProceed: $("#confirm-proceed"),
     confirmIcon: $("#confirm-icon"),
+    bulkUnloadMode: $("#bulkUnloadMode"),
+    exactReviewWarning: $("#exact-review-warning"),
     navItems: Array.from(document.querySelectorAll(".nav-item"))
   };
 
@@ -74,7 +82,10 @@
     booleanKeys.forEach((key) => { $("#" + key).checked = preferences[key] === true; });
     numericKeys.forEach((key) => { $("#" + key).value = String(preferences[key]); });
     $("#loadingUrlFallback").value = preferences.loadingUrlFallback;
+    $("#startupLoadingUrlFallback").value = preferences.startupLoadingUrlFallback;
+    $("#bulkUnloadMode").value = preferences.bulkUnloadMode;
     $("#tabSortMode").value = sortModes.includes(sortMode) ? sortMode : "eligible-first";
+    updateModeExplanation();
   }
 
   function readControls() {
@@ -85,7 +96,13 @@
       value[key] = raw === "" ? Number.NaN : Number(raw);
     });
     value.loadingUrlFallback = $("#loadingUrlFallback").value;
+    value.startupLoadingUrlFallback = $("#startupLoadingUrlFallback").value;
+    value.bulkUnloadMode = $("#bulkUnloadMode").value;
     return value;
+  }
+
+  function updateModeExplanation() {
+    ui.exactReviewWarning.hidden = $("#bulkUnloadMode").value !== "exact-review";
   }
 
   function setFormDisabled(disabled) {
@@ -115,20 +132,35 @@
   function riskyChanges(next) {
     const reasons = [];
     [
-      ["skipPinnedTabs", "Turning OFF pinned-tab protection may unload tabs you intentionally kept pinned."],
-      ["skipAudibleTabs", "Turning OFF audible-tab protection may interrupt audio or media."],
-      ["skipNonAutoDiscardableTabs", "Turning OFF browser auto-discard protection may override its caution flag."]
+      ["skipPinnedTabs", "Turning OFF manual pinned-tab protection may unload pages you deliberately pinned."],
+      ["skipAudibleTabs", "Turning OFF manual audible-tab protection may interrupt audio or media."],
+      ["skipNonAutoDiscardableTabs", "Turning OFF manual browser-protection respect may unload tabs the browser marked as protected."],
+      ["startupSkipPinnedTabs", "Turning OFF startup pinned-tab protection may unload pinned pages automatically during startup."],
+      ["startupSkipAudibleTabs", "Turning OFF startup audible-tab protection may interrupt media automatically during startup."],
+      ["startupSkipNonAutoDiscardableTabs", "Turning OFF startup browser-protection respect may unload tabs the browser marked as protected."]
     ].forEach(([key, message]) => {
       if (savedPreferences[key] === true && next[key] === false) reasons.push(message);
     });
     if (savedPreferences.skipLoadingTabs === true && next.skipLoadingTabs === false) {
-      reasons.push("Loading-tab protection will be disabled. A discard may interrupt an in-progress navigation.");
+      reasons.push("Manual loading-tab protection will be disabled. A discard may interrupt navigation.");
+    }
+    if (savedPreferences.startupSkipLoadingTabs === true && next.startupSkipLoadingTabs === false) {
+      reasons.push("Startup loading-tab protection will be disabled. Automatic unloading may interrupt in-progress navigation.");
     }
     if (savedPreferences.autoUnloadOnStartup === false && next.autoUnloadOnStartup === true) {
-      reasons.push("Startup auto-unload will run automatically. It targets the workspace captured at startup and cancels if the active workspace changes.");
+      reasons.push("Startup auto-unload will run automatically against the workspace captured at startup, stopping if the actual current workspace changes.");
+    }
+    if (savedPreferences.confirmBulkUnload === true && next.confirmBulkUnload === false) {
+      reasons.push("Bulk unloading will start immediately on click without a confirmation step. Adaptive mode can unload tabs that become eligible during its scan window.");
+    }
+    if (savedPreferences.bulkUnloadMode === "adaptive" && next.bulkUnloadMode === "exact-review") {
+      reasons.push("Exact list review is an advanced mode. It lets you review a fixed count and candidate list, but if loading state changes before confirmation the operation cancels instead of adapting. During browser startup this can be confusing because eligibility grows over time.");
     }
     if (savedPreferences.loadingUrlFallback === "skip" && next.loadingUrlFallback === "lastCommitted") {
-      reasons.push("If pendingUrl is missing, the last committed URL may refer to a previous page instead of the navigation in progress.");
+      reasons.push("For manual unloading, if pendingUrl is missing, the last committed URL may refer to an older page rather than the in-progress destination.");
+    }
+    if (savedPreferences.startupLoadingUrlFallback === "skip" && next.startupLoadingUrlFallback === "lastCommitted") {
+      reasons.push("For startup unloading, the last committed URL may refer to an older page rather than the in-progress destination.");
     }
     return reasons;
   }
@@ -186,6 +218,11 @@
           focusAfterSave = numericKeys.find((key) => !Number.isInteger(next[key])) || null;
           return;
         }
+        if (next.bulkUnloadMode !== "adaptive" && next.bulkUnloadMode !== "exact-review") {
+          showValidation(["Choose either Adaptive scanning or Exact list review."]);
+          setStatus("Not saved. Choose a valid bulk unload mode.", "warning");
+          return;
+        }
         if (!sortModes.includes(nextSortMode)) {
           showValidation(["Choose a valid tab sorting mode."]);
           setStatus("Not saved. Choose a valid sorting mode.", "warning");
@@ -218,6 +255,7 @@
           savedSortMode = nextSortMode;
           fillControls(savedPreferences, savedSortMode);
           showValidation([]);
+          updateModeExplanation();
           setStatus(isReset
             ? "Recommended defaults restored and saved."
             : "Saved automatically. These settings are now active.", "saved");
@@ -262,7 +300,7 @@
     const target = event.target;
     if (!target || (!booleanKeys.includes(target.id) &&
         !numericKeys.includes(target.id) &&
-        !["loadingUrlFallback", "tabSortMode"].includes(target.id))) return;
+        !["loadingUrlFallback", "startupLoadingUrlFallback", "bulkUnloadMode", "tabSortMode"].includes(target.id))) return;
     showValidation([]);
     queueSave(numericKeys.includes(target.id) ? 250 : 80);
   }
@@ -312,11 +350,50 @@
     setStatus("Could not reset settings: " + (error && error.message ? error.message : "unknown error."), "error");
   }));
 
-  ui.navItems.forEach((item) => {
-    item.addEventListener("click", () => {
-      ui.navItems.forEach((other) => other.classList.toggle("is-active", other === item));
+  function selectActiveNavigation(activeItem) {
+    ui.navItems.forEach((item) => {
+      const isActive = item === activeItem;
+      item.classList.toggle("is-active", isActive);
+      if (isActive) item.setAttribute("aria-current", "location");
+      else item.removeAttribute("aria-current");
     });
-  });
+  }
 
+  function setupScrollNavigation() {
+    const sectionMap = ui.navItems.map((item) => ({
+      item: item,
+      section: $(item.getAttribute("href"))
+    })).filter((entry) => entry.section);
+    let scheduled = false;
+    const updateFromScroll = () => {
+      scheduled = false;
+      const marker = window.scrollY + Math.min(160, Math.max(90, window.innerHeight * 0.22));
+      let active = sectionMap[0];
+      for (const entry of sectionMap) {
+        if (entry.section.getBoundingClientRect().top + window.scrollY <= marker) active = entry;
+      }
+      if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) {
+        active = sectionMap[sectionMap.length - 1] || active;
+      }
+      if (active) selectActiveNavigation(active.item);
+    };
+    const scheduleUpdate = () => {
+      if (scheduled) return;
+      scheduled = true;
+      window.requestAnimationFrame(updateFromScroll);
+    };
+    ui.navItems.forEach((item) => {
+      item.addEventListener("click", () => selectActiveNavigation(item));
+    });
+    window.addEventListener("scroll", scheduleUpdate, { passive: true });
+    window.addEventListener("resize", scheduleUpdate, { passive: true });
+    updateFromScroll();
+  }
+
+  function initNavigationOnReady() {
+    setupScrollNavigation();
+  }
+
+  initNavigationOnReady();
   init();
 })();
