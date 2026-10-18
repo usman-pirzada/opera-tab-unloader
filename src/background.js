@@ -575,6 +575,7 @@
       const discoveryEndAt = Math.min(hardDeadlineAt, monitoringStartedAt + configuredWindowMs);
       let monitoringEndAt = discoveryEndAt;
       let startupGraceResolved = run.kind !== "startup";
+      let firstSnapshotProcessed = false;
       let finalContext = null;
       let finalContextError = null;
       const attemptedIds = new Set();
@@ -646,7 +647,10 @@
           }
         }
 
-        if (Date.now() >= monitoringEndAt) break;
+        // Always process one fresh snapshot, even if browser startup or a slow
+        // workspace query consumed the monitoring window before the first scan.
+        // Later scans still stop at the configured window/deadline.
+        if (Date.now() >= monitoringEndAt && firstSnapshotProcessed) break;
 
         const candidates = context.allTabs.filter(function (tab) {
           return Number.isInteger(tab.id) &&
@@ -698,6 +702,7 @@
           }
         }
 
+        firstSnapshotProcessed = true;
         if (summary.aborted || run.cancelled || Date.now() >= hardDeadlineAt) break;
         if (issuedAttemptThisCycle) {
           // Immediately resnapshot after any real discard attempt. This admits
