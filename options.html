@@ -76,7 +76,7 @@
           </label>
           <label class="setting-card">
             <span class="setting-title">Maximum wait for loading candidates <span class="default-value">{Default: 20 seconds}</span></span>
-            <span class="setting-description">When loading-tab protection is ON, how long to wait for eligible loading tabs to finish. Range: 0–120 whole seconds. The overall deadline may end this wait earlier.</span>
+            <span class="setting-description">When loading-tab protection is ON, how long to wait for eligible loading tabs to finish. Range: 0–120 whole seconds. Zero means do not wait. The overall deadline may end this wait earlier.</span>
             <input id="startupLoadingWaitSeconds" class="setting-input" type="number" min="0" max="120" step="1" inputmode="numeric" required>
           </label>
           <label class="setting-card critical-card">

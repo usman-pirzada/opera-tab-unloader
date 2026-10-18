@@ -581,6 +581,7 @@
     }
 
     async function waitForLoadingCandidates(run, timeoutMs, preferences, waitForLoads) {
+      if (timeoutMs <= 0) return true;
       const deadline = Math.min(
         Date.now() + timeoutMs,
         Number.isFinite(run.deadlineAt) ? run.deadlineAt : Number.POSITIVE_INFINITY
@@ -812,6 +813,10 @@
         }
         finalSnapshot.context.allTabs.forEach(function (tab) { addCandidate(run, tab); });
 
+        // Freeze the startup candidate set before the first discard. Tabs opened
+        // or replaced during the unload queue are not fresh startup candidates.
+        run.collecting = false;
+        run.phase = "unloading";
         const summary = await withOperationLock(async function () {
           const result = { state: "completed", unloaded: 0, skipped: 0, failed: 0, aborted: false, messages: [] };
           const processed = new Set();
@@ -961,9 +966,8 @@
           run.candidates.delete(removedId);
           if (run.collecting) {
             api.tabs.get(addedId).then(function (tab) { addCandidate(run, tab); }).catch(function () {});
-          } else {
-            run.candidates.add(addedId);
           }
+          // Do not enqueue a replacement after startup's candidate set is frozen.
           run.updateGeneration += 1;
           run.lastActivityAt = Date.now();
           if (run.phase === "waiting-load") wakeRun(run);

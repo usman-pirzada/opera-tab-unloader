@@ -119,6 +119,11 @@ function mockBrowser(initialTabs, savedPrefs = {}, discardImpl) {
     create(value) {
       tabsById.set(value.id, { ...value });
       events.created.fire(clone(value));
+    },
+    replace(removedId, value) {
+      tabsById.delete(removedId);
+      tabsById.set(value.id, { ...value });
+      events.replaced.fire(value.id, removedId);
     }
   };
 }
@@ -375,4 +380,33 @@ test('startup cancels if a focused workspace switch occurs while the initial wor
   assert.deepEqual(browser.calls.discard, []);
   assert.equal(browser.store.startupStatus.state, 'cancelled');
   assert.match(browser.store.startupStatus.message, /workspace/i);
+});
+
+test('startup does not retry a replaced tab as a new candidate during the unload queue', async () => {
+  const browser = mockBrowser([
+    tab({ id: 1, active: true }),
+    tab({ id: 2, title: 'Candidate to replace' }),
+    tab({ id: 3, title: 'Later candidate' })
+  ], {
+    autoUnloadOnStartup: true,
+    skipLoadingTabs: true,
+    startupDiscoverySeconds: 2,
+    startupLoadingWaitSeconds: 0,
+    overallDeadlineSeconds: 10,
+    perTabTimeoutSeconds: 2
+  }, async (id) => {
+    if (id === 2) {
+      browser.replace(2, tab({ id: 4, title: 'Replacement tab' }));
+      return undefined;
+    }
+    return undefined;
+  });
+  const controller = createController(browser.api, policy, { discoveryMs: 5, loadingWaitMs: 0 });
+  controller.install();
+
+  await controller.runStartupAutoUnload();
+
+  assert.deepEqual(browser.calls.discard, [2]);
+  assert.equal(browser.tabsById.has(4), true);
+  assert.equal(browser.store.startupStatus.state, 'aborted');
 });
