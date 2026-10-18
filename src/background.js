@@ -18,6 +18,7 @@
     let startupSequence = 0;
     let unresolvedDiscard = null;
     let statusEnabled = true;
+    let manualAdaptiveRun = null;
 
     function timeoutError(operation) {
       const error = new Error(operation + " exceeded its configured time budget.");
@@ -86,79 +87,137 @@
       return context.getImageData(0, 0, size, size);
     }
 
+    let actionState = "idle";
+    let actionMessage = DEFAULT_OPERATION_STATUS.message;
+    let actionGeneration = 0;
+    let blinkTimer = null;
+    let successClearTimer = null;
+    let blinkVisible = true;
+
+    async function renderActionIconFrame(iconState) {
+      if (!api.action) return;
+      const visibleState = statusEnabled ? iconState : "off";
+      try {
+        if (typeof OffscreenCanvas === "function" && typeof api.action.setIcon === "function") {
+          const imageData = {};
+          [16, 32, 48].forEach(function (size) {
+            imageData[size] = drawStatusIcon(visibleState, size);
+          });
+          await api.action.setIcon({ imageData: imageData });
+          if (typeof api.action.setBadgeText === "function") await api.action.setBadgeText({ text: "" });
+        } else if (typeof api.action.setBadgeText === "function") {
+          const showDot = statusEnabled && visibleState !== "off" && visibleState !== "idle";
+          await api.action.setBadgeText({ text: showDot ? "●" : "" });
+          if (typeof api.action.setBadgeBackgroundColor === "function") {
+            await api.action.setBadgeBackgroundColor({
+              color: STATUS_COLORS[visibleState] || STATUS_COLORS.idle
+            });
+          }
+        }
+      } catch (_error) {
+        try {
+          if (typeof api.action.setBadgeText === "function") {
+            const showDot = statusEnabled && visibleState !== "off" && visibleState !== "idle";
+            await api.action.setBadgeText({ text: showDot ? "●" : "" });
+            if (typeof api.action.setBadgeBackgroundColor === "function") {
+              await api.action.setBadgeBackgroundColor({ color: STATUS_COLORS[visibleState] || STATUS_COLORS.idle });
+            }
+          }
+        } catch (_ignored) {}
+      }
+    }
+
+    async function renderCurrentActionStatus() {
+      if (actionState === "working") {
+        await renderActionIconFrame(blinkVisible ? "working" : "off");
+      } else {
+        await renderActionIconFrame(actionState === "idle" ? "off" : actionState);
+      }
+      try {
+        if (api.action && typeof api.action.setTitle === "function") {
+          await api.action.setTitle({
+            title: "Workspace Tab Unloader · " + (statusEnabled ? actionMessage : "Status indicator disabled")
+          });
+        }
+      } catch (_error) {}
+    }
+
+    function stopStatusTimers() {
+      if (blinkTimer !== null) {
+        clearInterval(blinkTimer);
+        blinkTimer = null;
+      }
+      if (successClearTimer !== null) {
+        clearTimeout(successClearTimer);
+        successClearTimer = null;
+      }
+    }
+
+    function startBlinkingStatus() {
+      if (blinkTimer !== null) return;
+      blinkVisible = true;
+      blinkTimer = setInterval(function () {
+        if (actionState !== "working") return;
+        blinkVisible = !blinkVisible;
+        renderActionIconFrame(blinkVisible ? "working" : "off").catch(function () {});
+      }, 650);
+    }
+
     async function setActionStatus(state, message) {
       const normalizedState = Object.prototype.hasOwnProperty.call(STATUS_COLORS, state) ? state : "idle";
-      const status = {
-        state: normalizedState,
-        message: typeof message === "string" && message ? message : DEFAULT_OPERATION_STATUS.message,
-        time: new Date().toISOString()
-      };
+      stopStatusTimers();
+      actionState = normalizedState;
+      actionMessage = typeof message === "string" && message ? message : DEFAULT_OPERATION_STATUS.message;
+      const generation = ++actionGeneration;
       try {
         const stored = await api.storage.local.get("showStatusIndicator");
         statusEnabled = stored.showStatusIndicator !== false;
       } catch (_error) {}
-      if (api.action) {
-        try {
-          if (typeof OffscreenCanvas === "function" && typeof api.action.setIcon === "function") {
-            const imageData = {};
-            const iconState = statusEnabled ? normalizedState : "off";
-            [16, 32, 48].forEach(function (size) { imageData[size] = drawStatusIcon(iconState, size); });
-            await api.action.setIcon({ imageData: imageData });
-            if (!statusEnabled && typeof api.action.setBadgeText === "function") {
-              await api.action.setBadgeText({ text: "" });
-            }
-          } else if (typeof api.action.setBadgeText === "function") {
-            await api.action.setBadgeText({ text: statusEnabled && normalizedState !== "idle" ? "●" : "" });
-            if (typeof api.action.setBadgeBackgroundColor === "function") {
-              await api.action.setBadgeBackgroundColor({
-                color: statusEnabled ? (STATUS_COLORS[normalizedState] || STATUS_COLORS.idle) : STATUS_COLORS.idle
-              });
-            }
-          }
-        } catch (_error) {
-          try {
-            if (typeof api.action.setBadgeText === "function") {
-              await api.action.setBadgeText({ text: statusEnabled && normalizedState !== "idle" ? "●" : "" });
-              if (typeof api.action.setBadgeBackgroundColor === "function") {
-                await api.action.setBadgeBackgroundColor({ color: STATUS_COLORS[normalizedState] || STATUS_COLORS.idle });
-              }
-            }
-          } catch (_ignored) {}
-        }
-        try {
-          if (typeof api.action.setTitle === "function") {
-            await api.action.setTitle({
-              title: "Workspace Tab Unloader · " + (statusEnabled ? status.message : "Status indicator disabled")
-            });
-          }
-        } catch (_error) {}
+
+      if (normalizedState === "working") {
+        startBlinkingStatus();
       }
+      await renderCurrentActionStatus();
+
+      const status = {
+        state: normalizedState,
+        message: actionMessage,
+        time: new Date().toISOString()
+      };
       try { await api.storage.local.set({ operationStatus: status }); } catch (_error) {}
+
+      // A successful bulk operation leaves a visible green dot briefly. It then
+      // returns to idle; opening the popup can clear it earlier. Errors persist.
+      if (normalizedState === "success") {
+        successClearTimer = setTimeout(function () {
+          if (actionGeneration === generation && actionState === "success") {
+            setActionStatus("idle", "Ready.").catch(function () {});
+          }
+        }, 6500);
+      }
       return status;
     }
 
-    const normalizeId = (value) => tabPolicy.normalizeWorkspaceId(value);
-    const sameWorkspace = (left, right) => tabPolicy.isSameWorkspace(left, right);
-    const errText = (error) => error && typeof error.message === "string" && error.message
-      ? error.message : "The browser returned an unknown API error.";
-
-    function withOperationLock(task) {
+    function withOperationLock(task, settings) {
+      const showStatus = Boolean(settings && settings.indicator);
       const operation = operationQueue.catch(function () {}).then(async function () {
-        await setActionStatus("working", "An unload operation is in progress.");
+        if (showStatus) await setActionStatus("working", "A bulk unload operation is running.");
         try {
           const result = await task();
-          let state = "success";
-          let message = result && typeof result.message === "string" ? result.message : "Operation completed.";
-          if (result && (result.failed > 0 ||
-              ["aborted", "cancelled", "uncertain", "failure", "timeout", "failed"].includes(result.state))) {
-            state = "error";
-          } else if (result && ["skipped", "review-changed", "idle"].includes(result.state)) {
-            state = "idle";
+          if (showStatus) {
+            let state = "idle";
+            const message = result && typeof result.message === "string" ? result.message : "Operation completed.";
+            if (result && (result.failed > 0 || result.aborted === true ||
+                ["aborted", "cancelled", "uncertain", "failure", "timeout", "failed", "review-changed"].includes(result.state))) {
+              state = "error";
+            } else if (result && Number.isInteger(result.unloaded) && result.unloaded > 0) {
+              state = "success";
+            }
+            await setActionStatus(state, message);
           }
-          await setActionStatus(state, message);
           return result;
         } catch (error) {
-          await setActionStatus("error", errText(error));
+          if (showStatus) await setActionStatus("error", errText(error));
           throw error;
         }
       });
@@ -462,7 +521,7 @@
       const requestStartedAt = Date.now();
       return withOperationLock(async function () {
         const loaded = await loadPreferences(message.preferences);
-        return inspectAndDiscard(message.tabId, message.workspaceId, loaded.preferences, false, null, {
+        return inspectAndDiscard(message.tabId, message.workspaceId, tabPolicy.getPolicyPreferences(loaded.preferences, "manual"), false, null, {
           deadlineAt: requestStartedAt + loaded.preferences.overallDeadlineSeconds * 1000
         });
       });
@@ -534,7 +593,7 @@
           (summary.aborted ? " Remaining tabs were not attempted." : "") +
           (summary.messages.length ? " " + summary.messages.join(" ") : "");
         return summary;
-      });
+      }, { indicator: true });
     }
 
     async function startupContextStillCurrent(run) {
