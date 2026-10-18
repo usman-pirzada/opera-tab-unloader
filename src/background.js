@@ -236,7 +236,7 @@
       };
     }
 
-    async function saveStartupStatus(status) {
+    async function saveStartupStatus(status, options) {
       const value = {
         time: new Date().toISOString(),
         state: status.state || "unknown",
@@ -246,14 +246,22 @@
         failed: Number.isInteger(status.failed) ? status.failed : 0
       };
       try { await api.storage.local.set({ startupStatus: value }); } catch (_error) {}
-      if (value.state === "running") {
-        await setActionStatus("working", value.message);
-      } else if (["completed", "success"].includes(value.state)) {
-        await setActionStatus("success", value.message || "Startup operation completed.");
-      } else if (["cancelled", "failed", "aborted", "timeout", "error"].includes(value.state)) {
-        await setActionStatus("error", value.message || "Startup operation stopped.");
-      } else {
-        await setActionStatus("idle", value.message || "Startup auto-unload did not run.");
+      if (!options || options.updateActionIcon !== false) {
+        if (value.state === "running") {
+          await setActionStatus("working", value.message);
+        } else if (["completed", "success"].includes(value.state)) {
+          if (value.unloaded > 0 && value.failed === 0) {
+            await setActionStatus("success", value.message || "Startup operation completed.");
+          } else if (value.failed > 0) {
+            await setActionStatus("error", value.message || "Startup operation ended with errors.");
+          } else {
+            await setActionStatus("idle", value.message || "Startup auto-unload finished with no tabs unloaded.");
+          }
+        } else if (["cancelled", "failed", "aborted", "timeout", "error"].includes(value.state)) {
+          await setActionStatus("error", value.message || "Startup operation stopped.");
+        } else if (value.state !== "disabled" && value.state !== "skipped") {
+          await setActionStatus("idle", value.message || "Startup auto-unload did not run.");
+        }
       }
       return value;
     }
@@ -962,231 +970,81 @@
       if (startupAttempted) return;
       startupAttempted = true;
       const startupStartedAt = Date.now();
-      // Start reading the active workspace immediately, before storage latency can
-      // delay the startup scope snapshot.
-      const activePromise = awaitWithinDeadline(
-        getActiveContext(), startupStartedAt + 10000, "reading the initial workspace"
-      ).then(function (value) {
-        return { active: value, error: null };
-      }).catch(function (error) {
-        return { active: null, error: error };
-      });
-      // Start loading preferences concurrently, but establish the startup workspace
-      // run before waiting for storage so workspace-switch events cannot be missed.
-      const preferencesPromise = loadPreferences();
-      const activeResult = await activePromise;
-      if (activeResult.error) {
+
+      // Read preferences first. When startup automation is OFF, do not query early
+      // restoring tabs or interpret session-restoration events as an unload failure.
+      let loaded;
+      try {
+        loaded = await awaitWithinDeadline(loadPreferences(), startupStartedAt + 10000, "loading startup settings");
+      } catch (error) {
         await saveStartupStatus({
-          state: activeResult.error && activeResult.error.operationTimedOut ? "timeout" : "skipped",
-          message: "Startup auto-unload skipped because the active tab could not be read: " + errText(activeResult.error)
+          state: error && error.operationTimedOut ? "timeout" : "failed",
+          message: "Startup settings could not be read: " + errText(error)
         });
         return;
       }
-      const active = activeResult.active;
+      const allPreferences = loaded.preferences;
+      if (!allPreferences.autoUnloadOnStartup) {
+        await saveStartupStatus({
+          state: "disabled",
+          message: "Startup auto-unload is off. No tabs were unloaded."
+        }, { updateActionIcon: false });
+        return;
+      }
+
+      const deadlineAt = startupStartedAt + allPreferences.overallDeadlineSeconds * 1000;
+      let active;
+      try {
+        active = await awaitWithinDeadline(getActiveContext(), deadlineAt, "reading the initial workspace");
+      } catch (error) {
+        await saveStartupStatus({
+          state: error && error.operationTimedOut ? "timeout" : "failed",
+          message: "Startup auto-unload could not verify the initial workspace: " + errText(error) + " No tabs were unloaded."
+        });
+        return;
+      }
       if (active.currentWorkspaceId === null) {
         await saveStartupStatus({
           state: "skipped",
-          message: "Startup auto-unload skipped: Opera GX did not expose a verifiable current workspace ID. No tabs were unloaded."
-        });
+          message: "Startup auto-unload skipped because Opera GX has not exposed a verifiable current workspace yet. No tabs were unloaded."
+        }, { updateActionIcon: false });
         return;
       }
 
       const run = {
         id: ++startupSequence,
+        kind: "startup",
         workspaceId: active.currentWorkspaceId,
         candidates: new Set(),
         collecting: true,
-        phase: "discovering",
+        phase: "monitoring",
         cancelled: false,
         cancelReason: "",
         updateGeneration: 0,
         wake: null,
-        loadingWaitExpired: false,
         startedAt: startupStartedAt,
         lastActivityAt: Date.now(),
-        deadlineAt: Number.POSITIVE_INFINITY
+        deadlineAt: deadlineAt
       };
       startupRun = run;
+      const preferences = tabPolicy.getPolicyPreferences(allPreferences, "startup");
 
       try {
-        const loaded = await awaitWithinDeadline(preferencesPromise, startupStartedAt + 10000, "loading startup settings");
-        const preferences = loaded.preferences;
-        run.deadlineAt = startupStartedAt + preferences.overallDeadlineSeconds * 1000;
-        if (!preferences.autoUnloadOnStartup) {
-          await setActionStatus("idle", "Startup auto-unload is disabled.");
-          return;
-        }
-        if (run.cancelled) {
-          await saveStartupStatus({
-            state: "cancelled",
-            message: run.cancelReason + " No tabs were unloaded."
-          });
-          return;
-        }
-
         await saveStartupStatus({
           state: "running",
-          message: "Startup auto-unload is checking tabs in the workspace that was current at startup."
+          message: "Startup auto-unload is monitoring the workspace that was current at browser startup."
         });
 
-        try {
-          (await awaitWithinDeadline(
-            api.tabs.query({}),
-            run.deadlineAt,
-            "discovering restored tabs"
-          )).forEach(function (tab) { addCandidate(run, tab); });
-        } catch (error) {
-          await saveStartupStatus({
-            state: error && error.operationTimedOut ? "timeout" : "failed",
-            message: "Startup auto-unload could not enumerate tabs: " + errText(error)
-          });
-          return;
-        }
-
-        // Include tabs that Opera restores shortly after the startup event.
-        // Workspace activation events cancel this run rather than retargeting it.
-        const discoveryMs = options && Number.isFinite(options.discoveryMs)
-          ? options.discoveryMs
-          : preferences.startupDiscoverySeconds * 1000;
-        const discoveryWaitMs = Math.max(0, Math.min(discoveryMs, run.deadlineAt - Date.now()));
-        if (discoveryWaitMs > 0) await waitForDurationInChunks(run, discoveryWaitMs);
-        if (run.cancelled) {
-          await saveStartupStatus({ state: "cancelled", message: run.cancelReason + " No further tabs were attempted." });
-          return;
-        }
-
-        const latest = await startupContextStillCurrent(run);
-        if (!latest.ok) {
-          await saveStartupStatus({ state: "cancelled", message: run.cancelReason + " No further tabs were attempted." });
-          return;
-        }
-        if (latest.context.unknownWorkspaceCount > 0) {
-          await saveStartupStatus({
-            state: "skipped",
-            message: "Startup auto-unload skipped because " + latest.context.unknownWorkspaceCount +
-              " tab(s) have unknown workspace identity. No tabs were unloaded."
-          });
-          return;
-        }
-
-        if (Date.now() >= run.deadlineAt) {
-          await saveStartupStatus({
-            state: "timeout",
-            message: "The overall startup deadline expired during discovery. No unload attempts were started."
-          });
-          return;
-        }
-        latest.context.allTabs.forEach(function (tab) { addCandidate(run, tab); });
-
-        // Keep collecting created/restored tabs through the loading grace period.
-        // Even when loading-tab protection is off, allow a short quiet period to
-        // catch session-restored tabs created just after the first query.
-        const configuredLoadingWaitMs = options && Number.isFinite(options.loadingWaitMs)
-          ? options.loadingWaitMs
-          : preferences.startupLoadingWaitSeconds * 1000;
-        if (run.candidates.size && Date.now() < run.deadlineAt) {
-          if (preferences.skipLoadingTabs) {
-            run.loadingWaitExpired = !(await waitForLoadingCandidates(
-              run, Math.min(configuredLoadingWaitMs, run.deadlineAt - Date.now()), preferences, true
-            ));
-          } else {
-            await waitForLoadingCandidates(
-              run, Math.min(configuredLoadingWaitMs, 2000, run.deadlineAt - Date.now()), preferences, false
-            );
-          }
-        }
-        if (run.cancelled) {
-          await saveStartupStatus({ state: "cancelled", message: run.cancelReason + " No further tabs were attempted." });
-          return;
-        }
-
-        if (Date.now() >= run.deadlineAt) {
-          await saveStartupStatus({
-            state: "timeout",
-            message: "The overall startup deadline expired during session restoration. No unload attempts were started."
-          });
-          return;
-        }
-        const finalSnapshot = await startupContextStillCurrent(run);
-        if (!finalSnapshot.ok) {
-          await saveStartupStatus({ state: "cancelled", message: run.cancelReason + " No further tabs were attempted." });
-          return;
-        }
-        if (finalSnapshot.context.unknownWorkspaceCount > 0) {
-          await saveStartupStatus({
-            state: "skipped",
-            message: "Startup auto-unload stopped because " + finalSnapshot.context.unknownWorkspaceCount +
-              " tab(s) have unknown workspace identity. No tabs were unloaded from this final snapshot."
-          });
-          return;
-        }
-        finalSnapshot.context.allTabs.forEach(function (tab) { addCandidate(run, tab); });
-
-        // Freeze the startup candidate set before the first discard. Tabs opened
-        // or replaced during the unload queue are not fresh startup candidates.
-        run.collecting = false;
-        run.phase = "unloading";
         const summary = await withOperationLock(async function () {
-          const result = { state: "completed", unloaded: 0, skipped: 0, failed: 0, aborted: false, messages: [] };
-          const processed = new Set();
-          while (true) {
-            const nextTabId = Array.from(run.candidates)
-              .filter(function (id) { return !processed.has(id); })
-              .sort(function (a, b) { return a - b; })[0];
-            if (!Number.isInteger(nextTabId)) break;
-            const tabId = nextTabId;
-            processed.add(tabId);
-            if (Date.now() >= run.deadlineAt) {
-              result.state = "timeout";
-              result.aborted = true;
-              result.messages.push("The overall startup deadline was reached. Remaining tabs were not attempted.");
-              break;
-            }
-            if (run.cancelled) {
-              result.state = "cancelled";
-              result.aborted = true;
-              result.messages.push(run.cancelReason || "Workspace changed during startup.");
-              break;
-            }
-            const before = await startupContextStillCurrent(run);
-            if (!before.ok) {
-              result.state = "cancelled";
-              result.aborted = true;
-              result.messages.push(run.cancelReason || "Workspace changed during startup.");
-              break;
-            }
-            if (before.context.unknownWorkspaceCount > 0) {
-              result.state = "aborted";
-              result.aborted = true;
-              result.messages.push("Workspace identity became ambiguous. Remaining tabs were not attempted.");
-              break;
-            }
-            const outcome = await inspectAndDiscard(tabId, run.workspaceId, preferences, true, run, {
-              deadlineAt: run.deadlineAt
-            });
-            if (outcome.state === "success") result.unloaded += 1;
-            else if (outcome.state === "skipped") result.skipped += 1;
-            else if (outcome.state === "failure") result.failed += 1;
-            else {
-              if (outcome.state === "uncertain") result.failed += 1;
-              result.state = run.cancelled ? "cancelled" : "aborted";
-              result.aborted = true;
-              result.messages.push(outcome.message);
-              break;
-            }
-            if (result.messages.length < 2 && outcome.message) result.messages.push(outcome.message);
-          }
-          run.collecting = false;
-          return result;
-        });
+          return runAdaptiveScan(run, preferences, {
+            scanWindowMs: allPreferences.startupDiscoverySeconds * 1000,
+            loadingGraceMs: allPreferences.startupLoadingWaitSeconds * 1000
+          });
+        }, { indicator: true });
 
-        const message = "Startup auto-unload " + (summary.state === "completed" ? "finished" : "stopped") +
-          ": " + summary.unloaded + " unloaded, " + summary.skipped + " skipped, " + summary.failed + " failed." +
-          (run.loadingWaitExpired ? " Some tabs were still loading when the wait limit expired and remained protected." : "") +
-          (summary.aborted && summary.messages.length ? " " + summary.messages.join(" ") : "");
         await saveStartupStatus({
           state: summary.state,
-          message: message,
+          message: summary.message,
           unloaded: summary.unloaded,
           skipped: summary.skipped,
           failed: summary.failed
