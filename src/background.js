@@ -822,7 +822,9 @@
         manualAdaptiveRun = run;
         try {
           return await runAdaptiveScan(run, preferences, {
-            scanWindowMs: allPreferences.adaptiveBulkScanSeconds * 1000,
+            scanWindowMs: options && Number.isFinite(options.adaptiveScanMs)
+              ? options.adaptiveScanMs
+              : allPreferences.adaptiveBulkScanSeconds * 1000,
             loadingGraceMs: 0
           });
         } finally {

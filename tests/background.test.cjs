@@ -190,7 +190,7 @@ test('startup auto-unload cancels when the user switches workspaces during resto
   const run = controller.runStartupAutoUnload();
   let switchedDuringLoadingWait = false;
   setTimeout(() => {
-    switchedDuringLoadingWait = controller.getStartupRun()?.phase === 'waiting-load';
+    switchedDuringLoadingWait = controller.getStartupRun()?.phase === 'monitoring';
     browser.activate(3);
   }, 50);
   await run;
@@ -210,7 +210,7 @@ test('startup waits for loading tabs to complete before attempting them by defau
     skipLoadingTabs: true,
     lastActiveWorkspaceId: 'A'
   });
-  const controller = createController(browser.api, policy, { discoveryMs: 5, loadingWaitMs: 200 });
+  const controller = createController(browser.api, policy, { discoveryMs: 90, loadingWaitMs: 200 });
   controller.install();
 
   setTimeout(() => browser.update(2, { status: 'complete' }), 35);
@@ -409,4 +409,70 @@ test('startup does not retry a replaced tab as a new candidate during the unload
   assert.deepEqual(browser.calls.discard, [2]);
   assert.equal(browser.tabsById.has(4), true);
   assert.equal(browser.store.startupStatus.state, 'aborted');
+});
+
+test('adaptive bulk unload rescans and unloads a tab that finishes loading during the scan window', async () => {
+  const browser = mockBrowser([
+    tab({ id: 1, active: true }),
+    tab({ id: 2, title: 'Ready immediately' }),
+    tab({ id: 3, status: 'loading', title: 'Finishes later' })
+  ], {
+    skipLoadingTabs: true,
+    adaptiveBulkScanSeconds: 45,
+    overallDeadlineSeconds: 30,
+    startupQuietPeriodSeconds: 1
+  });
+  const controller = createController(browser.api, policy, { adaptiveScanMs: 180 });
+  controller.install();
+  setTimeout(() => browser.update(3, { status: 'complete' }), 35);
+
+  const result = await controller.unloadAdaptiveMessage({
+    workspaceId: 'A',
+    preferences: {
+      ...policy.DEFAULT_PREFERENCES,
+      adaptiveBulkScanSeconds: 45,
+      overallDeadlineSeconds: 30,
+      startupQuietPeriodSeconds: 1
+    }
+  });
+
+  assert.deepEqual(browser.calls.discard, [2, 3]);
+  assert.equal(result.unloaded, 2);
+  assert.equal(result.remainingEligible, 0);
+  assert.match(result.message, /2 unloaded/);
+});
+
+test('adaptive bulk unload permanently stops when the active workspace changes', async () => {
+  let browser;
+  browser = mockBrowser(
+    [
+      tab({ id: 1, active: true }),
+      tab({ id: 2, title: 'Current workspace target' }),
+      tab({ id: 3, workspaceId: 'B', title: 'Other workspace active tab' })
+    ],
+    { adaptiveBulkScanSeconds: 5, overallDeadlineSeconds: 30 },
+    async (id, tabs) => {
+      const current = tabs.get(id);
+      current.discarded = true;
+      if (id === 2) browser.activate(3);
+      return { ...current };
+    }
+  );
+  const controller = createController(browser.api, policy, { adaptiveScanMs: 150 });
+  controller.install();
+
+  const result = await controller.unloadAdaptiveMessage({
+    workspaceId: 'A',
+    preferences: {
+      ...policy.DEFAULT_PREFERENCES,
+      adaptiveBulkScanSeconds: 5,
+      overallDeadlineSeconds: 30,
+      startupQuietPeriodSeconds: 1
+    }
+  });
+
+  assert.deepEqual(browser.calls.discard, [2]);
+  assert.equal(result.unloaded, 1);
+  assert.equal(result.state, 'cancelled');
+  assert.match(result.message, /workspace changed/i);
 });
