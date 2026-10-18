@@ -17,9 +17,21 @@
         </div>
         <button id="reset-button" class="secondary-button" type="button">Reset to defaults</button>
       </div>
-      <p class="intro-note">Every setting shows its recommended default. Critical settings ask for confirmation before saving. Values are validated before they are stored.</p>
+      <p class="intro-note">Changes are validated and saved automatically. Recommended defaults are shown beside each setting.</p>
     </header>
 
+    <div id="settings-status" class="feedback" role="status" aria-live="polite" data-state="idle">Loading saved settings…</div>
+
+    <div class="settings-layout">
+      <nav class="settings-nav" aria-label="Settings sections">
+        <p class="nav-heading">SETTINGS</p>
+        <a class="nav-item is-active" href="#protection-title"><span class="nav-icon" aria-hidden="true">◈</span><span>Tab protection</span></a>
+        <a class="nav-item" href="#startup-title"><span class="nav-icon" aria-hidden="true">◷</span><span>Startup &amp; time limits</span></a>
+        <a class="nav-item" href="#interface-title"><span class="nav-icon" aria-hidden="true">⚙</span><span>Interface &amp; shortcuts</span></a>
+        <div class="nav-divider"></div>
+        <p class="nav-tip">Changes take effect after they are saved locally. Critical changes require confirmation.</p>
+      </nav>
+      <div class="settings-main">
     <form id="settings-form" novalidate>
       <section class="settings-group" aria-labelledby="protection-title">
         <div class="group-heading">
@@ -95,7 +107,7 @@
             <input id="perTabTimeoutSeconds" class="setting-input" type="number" min="2" max="30" step="1" inputmode="numeric" required>
           </label>
         </div>
-        <p class="relationship-note">Validation rule: startup discovery, loading wait, quiet period, and at least one per-tab attempt must fit inside the overall deadline.</p>
+        <p class="relationship-note">Validation rule: startup discovery, loading wait, quiet period, and at least one per-tab attempt must fit inside the overall deadline. When a value conflicts with another setting, the extension will explain what needs adjustment instead of saving an impossible combination.</p>
       </section>
 
       <section class="settings-group" aria-labelledby="interface-title">
@@ -127,13 +139,28 @@
       </section>
 
       <div id="validation-error" class="feedback error-feedback" role="alert" hidden></div>
-      <div id="settings-status" class="feedback" role="status" aria-live="polite">Loading saved settings…</div>
-      <div class="form-actions">
-        <button id="save-button" class="primary-button" type="submit">Save settings</button>
-        <button id="reset-bottom-button" class="secondary-button" type="button">Reset to defaults</button>
-      </div>
     </form>
-    <footer class="page-footer">Local-only settings. No website scripts, host permissions, or network requests are used.</footer>
+      </div>
+    </div>
+
+    <dialog id="confirm-dialog" class="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+      <div class="dialog-panel">
+        <div class="dialog-heading">
+          <span id="confirm-icon" class="dialog-icon" aria-hidden="true">!</span>
+          <div>
+            <h2 id="confirm-title">Confirm change</h2>
+            <p id="confirm-message">Review this change before continuing.</p>
+          </div>
+        </div>
+        <ul id="confirm-details" class="dialog-details" hidden></ul>
+        <div class="dialog-actions">
+          <button id="confirm-cancel" class="secondary-button" type="button">Cancel</button>
+          <button id="confirm-proceed" class="primary-button" type="button">Confirm change</button>
+        </div>
+      </div>
+    </dialog>
+
+    <footer class="page-footer">Settings are stored locally. No website scripts, host permissions, or network requests are used.</footer>
   </main>
   <script src="src/tab-policy.js"></script>
   <script src="src/options.js"></script>

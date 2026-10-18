@@ -208,10 +208,16 @@ test('normalizes only recognized preference value types and safe URL fallback ch
 
 test('dedicated settings page validates values, confirms risky changes, and restores defaults', () => {
   assert.match(optionsSource, /policy\.validatePreferences\(next\)/);
-  assert.match(optionsSource, /window\.confirm/);
+  assert.match(optionsSource, /askConfirmation\(/);
+  assert.match(optionsSource, /ui\.dialog\.showModal\(\)/);
+  assert.match(optionsSource, /queueSave\(550\)/);
+  assert.doesNotMatch(optionsSource, /window\.confirm/);
   assert.match(optionsSource, /policy\.DEFAULT_PREFERENCES/);
   assert.match(optionsSource, /tabSortMode: "eligible-first"/);
   assert.match(optionsHtml, /Maximum time for one tab attempt/);
   assert.match(optionsHtml, /When a loading tab has no pending URL/);
   assert.match(optionsHtml, /Reset to defaults/);
+  assert.match(optionsHtml, /settings-nav/);
+  assert.match(optionsHtml, /startupQuietPeriodSeconds/);
+  assert.doesNotMatch(optionsHtml, /Save settings/);
 });
