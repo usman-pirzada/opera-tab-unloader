@@ -6,6 +6,7 @@ const path = require('node:path');
 const popupSource = fs.readFileSync(path.join(__dirname, '../src/popup.js'), 'utf8');
 const optionsSource = fs.readFileSync(path.join(__dirname, '../src/options.js'), 'utf8');
 const optionsHtml = fs.readFileSync(path.join(__dirname, '../options.html'), 'utf8');
+const optionsCss = fs.readFileSync(path.join(__dirname, '../options.css'), 'utf8');
 const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../manifest.json'), 'utf8'));
 const backgroundSource = fs.readFileSync(path.join(__dirname, '../src/background.js'), 'utf8');
 
@@ -212,6 +213,11 @@ test('dedicated settings page validates values, confirms risky changes, and rest
   assert.match(optionsSource, /askConfirmation\(/);
   assert.match(optionsSource, /ui\.dialog\.showModal\(\)/);
   assert.match(optionsSource, /queueSave\(550\)/);
+  assert.match(optionsSource, /showLoadingDialogAfterDelay\(/);
+  assert.match(optionsSource, /hideLoadingDialog\(\)/);
+  assert.match(optionsHtml, /id="loading-dialog"/);
+  assert.match(optionsCss, /\.loading-dialog::backdrop/);
+  assert.match(optionsCss, /\.loading-spinner/);
   assert.doesNotMatch(optionsSource, /window\.confirm/);
   assert.match(optionsSource, /policy\.DEFAULT_PREFERENCES/);
   assert.match(optionsSource, /savedSortMode = "eligible-first"/);

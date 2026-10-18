@@ -24,6 +24,8 @@
     reset: $("#reset-button"),
     status: $("#settings-status"),
     validation: $("#validation-error"),
+    loadingDialog: $("#loading-dialog"),
+    loadingMessage: $("#loading-message"),
     dialog: $("#confirm-dialog"),
     confirmTitle: $("#confirm-title"),
     confirmMessage: $("#confirm-message"),
@@ -40,6 +42,7 @@
   let saving = false;
   let pendingSave = false;
   let focusAfterSave = null;
+  let loadingDialogTimer = null;
   let confirmationResolver = null;
 
   function setStatus(message, state) {
@@ -90,6 +93,23 @@
       control.disabled = Boolean(disabled);
     });
     ui.reset.disabled = Boolean(disabled);
+  }
+
+  function showLoadingDialogAfterDelay(message) {
+    hideLoadingDialog();
+    ui.loadingMessage.textContent = message;
+    loadingDialogTimer = setTimeout(() => {
+      loadingDialogTimer = null;
+      if (!ui.loadingDialog.open) ui.loadingDialog.showModal();
+    }, 180);
+  }
+
+  function hideLoadingDialog() {
+    if (loadingDialogTimer !== null) {
+      clearTimeout(loadingDialogTimer);
+      loadingDialogTimer = null;
+    }
+    if (ui.loadingDialog.open) ui.loadingDialog.close();
   }
 
   function riskyChanges(next) {
@@ -191,6 +211,7 @@
         }
 
         setStatus(isReset ? "Restoring recommended defaults…" : "Saving settings…", "saving");
+        showLoadingDialogAfterDelay(isReset ? "Restoring recommended settings." : "Applying your settings.");
         try {
           await chrome.storage.local.set({ ...next, tabSortMode: nextSortMode });
           savedPreferences = { ...next };
@@ -206,6 +227,7 @@
         }
       } while (pendingSave);
     } finally {
+      hideLoadingDialog();
       saving = false;
       document.body.classList.remove("is-saving");
       setFormDisabled(false);

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Opera GX Workspace Tab Unloader",
-  "version": "0.1.9",
+  "version": "0.1.10",
   "description": "Inspect Opera GX workspaces, unload tabs safely, and optionally auto-unload the startup workspace.",
   "permissions": [
     "tabs",

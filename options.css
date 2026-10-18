@@ -160,3 +160,40 @@ body.is-saving .settings-main { opacity: .88; }
   .dialog-actions { flex-direction: column-reverse; }
   .dialog-actions button { width: 100% !important; }
 }
+
+
+/* Compact blocking progress dialog for slow settings writes, shown only after a short delay. */
+.loading-dialog {
+  width: min(330px, calc(100% - 32px));
+  max-width: 330px;
+  margin: auto;
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--surface-strong);
+  color: CanvasText;
+  box-shadow: var(--dialog-shadow);
+}
+.loading-dialog::backdrop {
+  background: rgb(0 0 0 / 42%);
+  backdrop-filter: blur(1.5px);
+}
+.loading-content {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  padding: 17px 19px;
+}
+.loading-spinner {
+  flex: 0 0 19px;
+  width: 19px;
+  height: 19px;
+  border: 2px solid color-mix(in srgb, var(--settings-green) 26%, transparent);
+  border-top-color: var(--settings-green);
+  border-right-color: var(--settings-green);
+  border-radius: 50%;
+  animation: rotate .7s linear infinite;
+}
+.loading-content h2 { margin: 0 0 3px; font-size: 13px; font-weight: 800; }
+.loading-content p { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.45; }
