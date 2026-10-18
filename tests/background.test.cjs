@@ -278,3 +278,26 @@ test('activation in an unfocused window does not cancel the last-focused startup
   assert.equal(browser.tabsById.get(2).discarded, true);
   assert.equal(browser.store.startupStatus.state, 'completed');
 });
+
+test('a switch away and back in the same focused window still cancels the startup run', async () => {
+  const browser = mockBrowser([
+    tab({ id: 1, active: true }),
+    tab({ id: 2, status: 'loading', title: 'Startup workspace tab' }),
+    tab({ id: 3, workspaceId: 'B', windowId: 1, title: 'Other workspace tab' })
+  ], {
+    autoUnloadOnStartup: true,
+    skipLoadingTabs: true
+  });
+  const controller = createController(browser.api, policy, { discoveryMs: 10, loadingWaitMs: 3000 });
+  controller.install();
+
+  // Simulate the activation event for workspace B being delivered after the
+  // current tab query already observes workspace A again.
+  setTimeout(() => browser.events.activated.fire({ tabId: 3, windowId: 1 }), 25);
+  setTimeout(() => browser.update(2, { status: 'complete' }), 45);
+  await controller.runStartupAutoUnload();
+
+  assert.deepEqual(browser.calls.discard, []);
+  assert.equal(browser.store.startupStatus.state, 'cancelled');
+  assert.match(browser.store.startupStatus.message, /workspace changed/i);
+});

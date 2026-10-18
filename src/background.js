@@ -149,18 +149,35 @@
       if (run.phase === "waiting-load") wakeRun(run);
     }
 
-    async function onTabActivated(_activeInfo) {
+    async function onTabActivated(activeInfo) {
       const run = startupRun;
       if (!run || run.cancelled) return;
 
-      // Use the current tab in the last-focused window, not merely the tab ID
-      // from this event. Activation events can also originate in another window.
-      let currentWorkspaceId = null;
-      try {
-        currentWorkspaceId = (await getActiveContext()).currentWorkspaceId;
-      } catch (_error) {}
+      // Inspect both the event tab and the active tab in the last-focused window.
+      // A switch away and back can happen before this asynchronous handler resumes;
+      // the event tab still lets us detect that switch when it belongs to the focused
+      // window. Events from an unfocused window must not cancel the startup run.
+      const [eventTabResult, focusedContextResult] = await Promise.allSettled([
+        api.tabs.get(activeInfo.tabId),
+        getActiveContext()
+      ]);
+      const eventTab = eventTabResult.status === "fulfilled" ? eventTabResult.value : null;
+      const focusedContext = focusedContextResult.status === "fulfilled" ? focusedContextResult.value : null;
+      const currentWorkspaceId = focusedContext ? focusedContext.currentWorkspaceId : null;
+      const focusedWindowId = focusedContext && focusedContext.activeTab
+        ? focusedContext.activeTab.windowId : null;
+      const eventWindowId = activeInfo && Number.isInteger(activeInfo.windowId)
+        ? activeInfo.windowId
+        : (eventTab ? eventTab.windowId : null);
+      const eventWorkspaceId = eventTab ? normalizeId(eventTab.workspaceId) : null;
+      const activationIsInFocusedWindow = Number.isInteger(eventWindowId) &&
+        Number.isInteger(focusedWindowId) && eventWindowId === focusedWindowId;
 
-      if (currentWorkspaceId === null) {
+      if (activationIsInFocusedWindow && !sameWorkspace(eventWorkspaceId, run.workspaceId)) {
+        cancelStartupRun(run, eventWorkspaceId === null
+          ? "The activated tab's workspace became unverifiable during startup. Remaining tabs were not attempted."
+          : "Workspace changed during startup auto-unload. Remaining tabs were not attempted.");
+      } else if (currentWorkspaceId === null) {
         cancelStartupRun(run, "The current workspace became unverifiable during startup auto-unload. Remaining tabs were not attempted.");
       } else if (!sameWorkspace(currentWorkspaceId, run.workspaceId)) {
         cancelStartupRun(run, "Workspace changed during startup auto-unload. Remaining tabs were not attempted.");
