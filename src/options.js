@@ -39,6 +39,7 @@
   let saveTimer = null;
   let saving = false;
   let pendingSave = false;
+  let focusAfterSave = null;
   let confirmationResolver = null;
 
   function setStatus(message, state) {
@@ -162,8 +163,7 @@
         if (errors.length) {
           showValidation(errors);
           setStatus("Not saved. Correct the highlighted settings before trying again.", "warning");
-          const invalidNumber = numericKeys.find((key) => !Number.isInteger(next[key]));
-          if (invalidNumber) $("#" + invalidNumber).focus();
+          focusAfterSave = numericKeys.find((key) => !Number.isInteger(next[key])) || null;
           return;
         }
         if (!sortModes.includes(nextSortMode)) {
@@ -209,6 +209,10 @@
       saving = false;
       document.body.classList.remove("is-saving");
       setFormDisabled(false);
+      if (focusAfterSave) {
+        $("#" + focusAfterSave).focus();
+        focusAfterSave = null;
+      }
       if (pendingSave && !ui.validation.hidden) pendingSave = false;
     }
   }

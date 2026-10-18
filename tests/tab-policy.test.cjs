@@ -6,6 +6,7 @@ const path = require('node:path');
 const popupSource = fs.readFileSync(path.join(__dirname, '../src/popup.js'), 'utf8');
 const optionsSource = fs.readFileSync(path.join(__dirname, '../src/options.js'), 'utf8');
 const optionsHtml = fs.readFileSync(path.join(__dirname, '../options.html'), 'utf8');
+const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '../manifest.json'), 'utf8'));
 const backgroundSource = fs.readFileSync(path.join(__dirname, '../src/background.js'), 'utf8');
 
 function safeTab(overrides = {}) {
@@ -221,4 +222,18 @@ test('dedicated settings page validates values, confirms risky changes, and rest
   assert.match(optionsHtml, /settings-nav/);
   assert.match(optionsHtml, /startupQuietPeriodSeconds/);
   assert.doesNotMatch(optionsHtml, /Save settings/);
+});
+
+test('status indicators are toolbar-only and do not appear in the Options tab favicon', () => {
+  assert.equal(manifest.icons['16'], 'icons/base16.png');
+  assert.equal(manifest.icons['32'], 'icons/base32.png');
+  assert.equal(manifest.icons['48'], 'icons/base48.png');
+  assert.equal(manifest.action.default_icon['16'], 'icons/base16.png');
+  assert.doesNotMatch(JSON.stringify(manifest.icons), /idle16|working16|success16|error16/);
+});
+
+test('popup refresh button provides visible rotating busy feedback', () => {
+  assert.match(popupSource, /body\.classList\.add\("is-refreshing"\)/);
+  assert.match(popupSource, /ui\.refresh\.setAttribute\("aria-busy", "true"\)/);
+  assert.match(popupSource, /body\.classList\.remove\("is-refreshing"\)/);
 });
