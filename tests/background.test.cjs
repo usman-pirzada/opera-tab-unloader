@@ -237,3 +237,44 @@ test('startup collects tabs created late during the loading wait', async () => {
   assert.equal(browser.tabsById.get(2).discarded, true);
   assert.equal(browser.tabsById.get(3).discarded, true);
 });
+
+test('does not gate startup auto-unload on the prior session workspace ID', async () => {
+  const browser = mockBrowser([
+    tab({ id: 1, active: true }),
+    tab({ id: 2, title: 'Current startup workspace tab' })
+  ], {
+    autoUnloadOnStartup: true,
+    skipLoadingTabs: true,
+    lastActiveWorkspaceId: 'B'
+  });
+  const controller = createController(browser.api, policy, { discoveryMs: 5, loadingWaitMs: 3000 });
+  controller.install();
+
+  await controller.runStartupAutoUnload();
+
+  assert.deepEqual(browser.calls.discard, [2]);
+  assert.equal(browser.tabsById.get(2).discarded, true);
+  assert.equal(browser.store.startupStatus.state, 'completed');
+});
+
+test('activation in an unfocused window does not cancel the last-focused startup workspace', async () => {
+  const browser = mockBrowser([
+    tab({ id: 1, active: true }),
+    tab({ id: 2, status: 'loading', title: 'Current workspace loading tab' }),
+    tab({ id: 3, windowId: 2, workspaceId: 'B', active: true, title: 'Other window tab' })
+  ], {
+    autoUnloadOnStartup: true,
+    skipLoadingTabs: true,
+    lastActiveWorkspaceId: 'A'
+  });
+  const controller = createController(browser.api, policy, { discoveryMs: 10, loadingWaitMs: 3000 });
+  controller.install();
+
+  setTimeout(() => browser.events.activated.fire({ tabId: 3, windowId: 2 }), 25);
+  setTimeout(() => browser.update(2, { status: 'complete' }), 45);
+  await controller.runStartupAutoUnload();
+
+  assert.deepEqual(browser.calls.discard, [2]);
+  assert.equal(browser.tabsById.get(2).discarded, true);
+  assert.equal(browser.store.startupStatus.state, 'completed');
+});

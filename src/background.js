@@ -3,7 +3,7 @@
   if (typeof importScripts === "function" && !root.TabPolicy) importScripts("tab-policy.js");
   const policy = root.TabPolicy || (typeof require === "function" ? require("./tab-policy.js") : null);
   const PREF_KEYS = policy ? Object.keys(policy.DEFAULT_PREFERENCES) : [];
-  const DEFAULT_DISCOVERY_MS = 2000;
+  const DEFAULT_DISCOVERY_MS = 8000;
   const DEFAULT_LOADING_WAIT_MS = 20000;
 
   function createController(api, tabPolicy, options) {
@@ -28,7 +28,7 @@
     async function loadPreferences(override) {
       let stored = {};
       try {
-        stored = await api.storage.local.get(PREF_KEYS.concat(["lastActiveWorkspaceId"]));
+        stored = await api.storage.local.get(PREF_KEYS);
       } catch (_error) {}
       const preferences = { ...tabPolicy.DEFAULT_PREFERENCES };
       PREF_KEYS.forEach(function (key) {
@@ -124,6 +124,7 @@
       addCandidate(run, tab);
       if (!wasCandidate && tab && run.candidates.has(tab.id)) {
         run.updateGeneration += 1;
+        run.lastActivityAt = Date.now();
         if (run.phase === "waiting-load") wakeRun(run);
       }
     }
@@ -134,10 +135,8 @@
       if (run.collecting) addCandidate(run, tab);
       if (run.candidates.has(tabId)) {
         run.updateGeneration += 1;
+        run.lastActivityAt = Date.now();
         if (run.phase === "waiting-load") wakeRun(run);
-      }
-      if (tab && tab.active === true && !sameWorkspace(tab.workspaceId, run.workspaceId)) {
-        cancelStartupRun(run, "The active workspace changed or became unverifiable. Remaining startup unloads were cancelled.");
       }
     }
 
@@ -146,31 +145,29 @@
       if (!run || run.cancelled || !run.candidates.has(tabId)) return;
       run.candidates.delete(tabId);
       run.updateGeneration += 1;
+      run.lastActivityAt = Date.now();
       if (run.phase === "waiting-load") wakeRun(run);
     }
 
-    async function onTabActivated(activeInfo) {
-      let tab = null;
-      try { tab = await api.tabs.get(activeInfo.tabId); } catch (_error) {}
-      const activeWorkspaceId = tab ? normalizeId(tab.workspaceId) : null;
-
-      // Cancel the startup run immediately after the activated tab's workspace
-      // has been read. Persistence is best-effort and must not delay cancellation.
+    async function onTabActivated(_activeInfo) {
       const run = startupRun;
-      if (run && !sameWorkspace(activeWorkspaceId, run.workspaceId)) {
-        cancelStartupRun(run, activeWorkspaceId === null
-          ? "The active workspace became unverifiable during startup."
-          : "Workspace changed during startup auto-unload. Remaining tabs were not attempted.");
-      } else if (run) {
-        run.updateGeneration += 1;
-        if (run.phase === "waiting-load") wakeRun(run);
-      }
+      if (!run || run.cancelled) return;
 
-      if (activeWorkspaceId !== null) {
-        getActiveContext().then(function (focusedContext) {
-          const cachedId = focusedContext.currentWorkspaceId;
-          if (cachedId !== null) return api.storage.local.set({ lastActiveWorkspaceId: cachedId });
-        }).catch(function () {});
+      // Use the current tab in the last-focused window, not merely the tab ID
+      // from this event. Activation events can also originate in another window.
+      let currentWorkspaceId = null;
+      try {
+        currentWorkspaceId = (await getActiveContext()).currentWorkspaceId;
+      } catch (_error) {}
+
+      if (currentWorkspaceId === null) {
+        cancelStartupRun(run, "The current workspace became unverifiable during startup auto-unload. Remaining tabs were not attempted.");
+      } else if (!sameWorkspace(currentWorkspaceId, run.workspaceId)) {
+        cancelStartupRun(run, "Workspace changed during startup auto-unload. Remaining tabs were not attempted.");
+      } else {
+        run.updateGeneration += 1;
+        run.lastActivityAt = Date.now();
+        if (run.phase === "waiting-load") wakeRun(run);
       }
     }
 
@@ -325,30 +322,46 @@
       return { ok: true, context: context };
     }
 
-    async function waitForLoadingCandidates(run, timeoutMs) {
+    async function waitForLoadingCandidates(run, timeoutMs, preferences, waitForLoads) {
       const deadline = Date.now() + timeoutMs;
+      const quietPeriodMs = 1200;
+      const readinessPreferences = { ...preferences, skipLoadingTabs: false };
       run.phase = "waiting-load";
       while (!run.cancelled && Date.now() < deadline) {
         const generation = run.updateGeneration;
         const candidateIds = Array.from(run.candidates);
         let loadingFound = false;
-        for (const tabId of candidateIds) {
-          if (run.cancelled) return false;
-          try {
-            const tab = await api.tabs.get(tabId);
-            if (sameWorkspace(tab.workspaceId, run.workspaceId) && tab.status === "loading") {
-              loadingFound = true;
-              break;
+        if (waitForLoads) {
+          for (const tabId of candidateIds) {
+            if (run.cancelled) return false;
+            try {
+              const tab = await api.tabs.get(tabId);
+              const couldBecomeEligible = tabPolicy.evaluateTab(
+                tab, run.workspaceId, readinessPreferences
+              ).eligible;
+              if (sameWorkspace(tab.workspaceId, run.workspaceId) &&
+                  tab.status === "loading" && couldBecomeEligible) {
+                loadingFound = true;
+                break;
+              }
+            } catch (_error) {
+              // A tab closed during restoration is no longer a candidate.
             }
-          } catch (_error) {
-            // A tab closed during restoration is no longer a candidate.
           }
         }
         if (generation !== run.updateGeneration) continue;
-        if (!loadingFound) return true;
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
-        await waitForSignal(run, remaining, generation);
+        const quietElapsed = Date.now() - (run.lastActivityAt || run.startedAt || Date.now());
+        if (!loadingFound && quietElapsed >= quietPeriodMs) return true;
+
+        // Even if no currently-known tab is loading, keep collecting briefly
+        // after the most recent relevant tab event. This catches tabs restored
+        // a little later than the first query without polling the browser.
+        const waitMs = loadingFound
+          ? remaining
+          : Math.min(remaining, Math.max(1, quietPeriodMs - quietElapsed));
+        await waitForSignal(run, waitMs, generation);
       }
       return false;
     }
@@ -381,15 +394,6 @@
         return;
       }
 
-      const cachedWorkspaceId = normalizeId(loaded.stored.lastActiveWorkspaceId);
-      if (cachedWorkspaceId !== null && !sameWorkspace(cachedWorkspaceId, active.currentWorkspaceId)) {
-        await saveStartupStatus({
-          state: "skipped",
-          message: "Startup auto-unload skipped because the current workspace differs from the last observed workspace. No tabs were unloaded."
-        });
-        return;
-      }
-
       const run = {
         id: ++startupSequence,
         workspaceId: active.currentWorkspaceId,
@@ -400,12 +404,13 @@
         cancelReason: "",
         updateGeneration: 0,
         wake: null,
-        loadingWaitExpired: false
+        loadingWaitExpired: false,
+        startedAt: Date.now(),
+        lastActivityAt: Date.now()
       };
       startupRun = run;
 
       try {
-        try { await api.storage.local.set({ lastActiveWorkspaceId: run.workspaceId }); } catch (_error) {}
         await saveStartupStatus({
           state: "running",
           message: "Startup auto-unload is checking tabs in the workspace that was current at startup."
@@ -443,9 +448,14 @@
         latest.context.allTabs.forEach(function (tab) { addCandidate(run, tab); });
 
         // Keep collecting created/restored tabs through the loading grace period.
-        // This catches tabs that Opera creates after the first tab query.
-        if (preferences.skipLoadingTabs && run.candidates.size) {
-          run.loadingWaitExpired = !(await waitForLoadingCandidates(run, loadingWaitMs));
+        // Even when loading-tab protection is off, allow a short quiet period to
+        // catch session-restored tabs created just after the first query.
+        if (run.candidates.size) {
+          if (preferences.skipLoadingTabs) {
+            run.loadingWaitExpired = !(await waitForLoadingCandidates(run, loadingWaitMs, preferences, true));
+          } else {
+            await waitForLoadingCandidates(run, Math.min(loadingWaitMs, 2000), preferences, false);
+          }
         }
         if (run.cancelled) {
           await saveStartupStatus({ state: "cancelled", message: run.cancelReason + " No further tabs were attempted." });
@@ -466,12 +476,17 @@
           return;
         }
         finalSnapshot.context.allTabs.forEach(function (tab) { addCandidate(run, tab); });
-        run.collecting = false;
-        const candidateIds = Array.from(run.candidates).sort(function (a, b) { return a - b; });
 
         const summary = await withOperationLock(async function () {
           const result = { state: "completed", unloaded: 0, skipped: 0, failed: 0, aborted: false, messages: [] };
-          for (const tabId of candidateIds) {
+          const processed = new Set();
+          while (true) {
+            const nextTabId = Array.from(run.candidates)
+              .filter(function (id) { return !processed.has(id); })
+              .sort(function (a, b) { return a - b; })[0];
+            if (!Number.isInteger(nextTabId)) break;
+            const tabId = nextTabId;
+            processed.add(tabId);
             if (run.cancelled) {
               result.state = "cancelled";
               result.aborted = true;
@@ -504,6 +519,7 @@
             }
             if (result.messages.length < 2 && outcome.message) result.messages.push(outcome.message);
           }
+          run.collecting = false;
           return result;
         });
 
@@ -576,6 +592,7 @@
             run.candidates.add(addedId);
           }
           run.updateGeneration += 1;
+          run.lastActivityAt = Date.now();
           if (run.phase === "waiting-load") wakeRun(run);
         });
       }
