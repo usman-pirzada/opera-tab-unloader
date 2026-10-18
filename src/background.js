@@ -1225,6 +1225,7 @@
       runStartupAutoUnload: runStartupAutoUnload,
       unloadOneMessage: unloadOneMessage,
       unloadBatchMessage: unloadBatchMessage,
+      unloadAdaptiveMessage: unloadAdaptiveMessage,
       inspectAndDiscard: inspectAndDiscard,
       getStartupRun: function () { return startupRun; }
     };

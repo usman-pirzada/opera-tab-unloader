@@ -135,7 +135,7 @@ test('uses tabs.discard result without an unnecessary verification lookup', asyn
   ]);
   const controller = createController(browser.api, policy, { discoveryMs: 5, loadingWaitMs: 20 });
   const result = await controller.inspectAndDiscard(2, 'A', policy.DEFAULT_PREFERENCES, true, null);
-  assert.equal(result.state, 'success');
+  assert.equal(result.state, 'success', JSON.stringify(result));
   assert.deepEqual(browser.calls.discard, [2]);
   assert.equal(browser.calls.get.filter((id) => id === 2).length, 1);
 });
@@ -148,7 +148,7 @@ test('reports a missing post-discard tab as uncertain, never as success', async 
   );
   const controller = createController(browser.api, policy);
   const result = await controller.inspectAndDiscard(2, 'A', policy.DEFAULT_PREFERENCES, true, null);
-  assert.equal(result.state, 'uncertain');
+  assert.equal(result.state, 'uncertain', JSON.stringify(result));
   assert.match(result.message, /uncertain/i);
 });
 
@@ -168,7 +168,7 @@ test('bulk unloading stops after an uncertain outcome instead of attempting late
   );
   const controller = createController(browser.api, policy);
   const result = await controller.unloadBatchMessage({ workspaceId: 'A', tabIds: [2, 3], preferences: {} });
-  assert.equal(result.state, 'aborted');
+  assert.equal(result.state, 'aborted', JSON.stringify(result));
   assert.equal(result.failed, 1);
   assert.deepEqual(browser.calls.discard, [2]);
   assert.equal(browser.tabsById.get(3).discarded, false);
@@ -197,7 +197,7 @@ test('startup auto-unload cancels when the user switches workspaces during resto
 
   assert.equal(switchedDuringLoadingWait, true);
   assert.deepEqual(browser.calls.discard, []);
-  assert.equal(browser.store.startupStatus.state, 'cancelled');
+  assert.equal(browser.store.startupStatus.state, 'cancelled', JSON.stringify(browser.store.startupStatus));
   assert.match(browser.store.startupStatus.message, /workspace changed/i);
 });
 
@@ -216,9 +216,9 @@ test('startup waits for loading tabs to complete before attempting them by defau
   setTimeout(() => browser.update(2, { status: 'complete' }), 35);
   await controller.runStartupAutoUnload();
 
-  assert.deepEqual(browser.calls.discard, [2]);
+  assert.deepEqual(browser.calls.discard, [2], JSON.stringify(browser.store.startupStatus));
   assert.equal(browser.tabsById.get(2).discarded, true);
-  assert.equal(browser.store.startupStatus.state, 'completed');
+  assert.equal(browser.store.startupStatus.state, 'completed', JSON.stringify(browser.store.startupStatus));
 });
 
 
@@ -257,9 +257,9 @@ test('does not gate startup auto-unload on the prior session workspace ID', asyn
 
   await controller.runStartupAutoUnload();
 
-  assert.deepEqual(browser.calls.discard, [2]);
+  assert.deepEqual(browser.calls.discard, [2], JSON.stringify(browser.store.startupStatus));
   assert.equal(browser.tabsById.get(2).discarded, true);
-  assert.equal(browser.store.startupStatus.state, 'completed');
+  assert.equal(browser.store.startupStatus.state, 'completed', JSON.stringify(browser.store.startupStatus));
 });
 
 test('activation in an unfocused window does not cancel the last-focused startup workspace', async () => {
@@ -279,9 +279,9 @@ test('activation in an unfocused window does not cancel the last-focused startup
   setTimeout(() => browser.update(2, { status: 'complete' }), 45);
   await controller.runStartupAutoUnload();
 
-  assert.deepEqual(browser.calls.discard, [2]);
+  assert.deepEqual(browser.calls.discard, [2], JSON.stringify(browser.store.startupStatus));
   assert.equal(browser.tabsById.get(2).discarded, true);
-  assert.equal(browser.store.startupStatus.state, 'completed');
+  assert.equal(browser.store.startupStatus.state, 'completed', JSON.stringify(browser.store.startupStatus));
 });
 
 test('activation of another workspace tab does not cancel when the active workspace is unchanged', async () => {
@@ -302,9 +302,9 @@ test('activation of another workspace tab does not cancel when the active worksp
   setTimeout(() => browser.update(2, { status: 'complete' }), 45);
   await controller.runStartupAutoUnload();
 
-  assert.deepEqual(browser.calls.discard, [2]);
+  assert.deepEqual(browser.calls.discard, [2], JSON.stringify(browser.store.startupStatus));
   assert.equal(browser.tabsById.get(2).discarded, true);
-  assert.equal(browser.store.startupStatus.state, 'completed');
+  assert.equal(browser.store.startupStatus.state, 'completed', JSON.stringify(browser.store.startupStatus));
 });
 
 test('startup switch away and back is remembered while preferences are loading', async () => {
@@ -331,7 +331,7 @@ test('startup switch away and back is remembered while preferences are loading',
   await run;
 
   assert.deepEqual(browser.calls.discard, []);
-  assert.equal(browser.store.startupStatus.state, 'cancelled');
+  assert.equal(browser.store.startupStatus.state, 'cancelled', JSON.stringify(browser.store.startupStatus));
   assert.match(browser.store.startupStatus.message, /workspace changed/i);
 });
 
@@ -377,9 +377,9 @@ test('startup ignores restoration activation noise while detecting the initial w
   setTimeout(() => browser.update(2, { status: 'complete' }), 45);
   await run;
 
-  assert.deepEqual(browser.calls.discard, [2]);
+  assert.deepEqual(browser.calls.discard, [2], JSON.stringify(browser.store.startupStatus));
   assert.equal(browser.tabsById.get(2).discarded, true);
-  assert.equal(browser.store.startupStatus.state, 'completed');
+  assert.equal(browser.store.startupStatus.state, 'completed', JSON.stringify(browser.store.startupStatus));
 });
 
 test('startup does not retry a replaced tab as a new candidate during the unload queue', async () => {
