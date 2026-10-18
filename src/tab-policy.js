@@ -6,8 +6,85 @@
     skipAudibleTabs: true,
     skipNonAutoDiscardableTabs: true,
     skipLoadingTabs: true,
-    autoUnloadOnStartup: false
+    loadingUrlFallback: "skip",
+    autoUnloadOnStartup: false,
+    startupDiscoverySeconds: 8,
+    startupLoadingWaitSeconds: 20,
+    overallDeadlineSeconds: 60,
+    perTabTimeoutSeconds: 5,
+    showStatusIndicator: true
   });
+
+  const BOOLEAN_PREFERENCES = Object.freeze([
+    "skipPinnedTabs",
+    "skipAudibleTabs",
+    "skipNonAutoDiscardableTabs",
+    "skipLoadingTabs",
+    "autoUnloadOnStartup",
+    "showStatusIndicator"
+  ]);
+
+  const INTEGER_PREFERENCE_RANGES = Object.freeze({
+    startupDiscoverySeconds: Object.freeze({ min: 2, max: 30 }),
+    startupLoadingWaitSeconds: Object.freeze({ min: 0, max: 120 }),
+    overallDeadlineSeconds: Object.freeze({ min: 10, max: 300 }),
+    perTabTimeoutSeconds: Object.freeze({ min: 2, max: 30 })
+  });
+
+  function validatePreferences(value) {
+    const input = value && typeof value === "object" ? value : {};
+    const errors = [];
+    BOOLEAN_PREFERENCES.forEach(function (key) {
+      if (typeof input[key] !== "boolean") errors.push(key + " must be a boolean.");
+    });
+    Object.entries(INTEGER_PREFERENCE_RANGES).forEach(function (entry) {
+      const key = entry[0];
+      const range = entry[1];
+      if (!Number.isInteger(input[key]) || input[key] < range.min || input[key] > range.max) {
+        errors.push(key + " must be an integer between " + range.min + " and " + range.max + ".");
+      }
+    });
+    if (input.loadingUrlFallback !== "skip" && input.loadingUrlFallback !== "lastCommitted") {
+      errors.push("loadingUrlFallback must be skip or lastCommitted.");
+    }
+    if (Number.isInteger(input.startupDiscoverySeconds) &&
+        Number.isInteger(input.startupLoadingWaitSeconds) &&
+        Number.isInteger(input.overallDeadlineSeconds) &&
+        input.startupDiscoverySeconds + input.startupLoadingWaitSeconds > input.overallDeadlineSeconds) {
+      errors.push("Startup discovery plus loading wait must not exceed the overall deadline.");
+    }
+    if (Number.isInteger(input.perTabTimeoutSeconds) &&
+        Number.isInteger(input.overallDeadlineSeconds) &&
+        input.perTabTimeoutSeconds > input.overallDeadlineSeconds) {
+      errors.push("Per-tab timeout must not exceed the overall deadline.");
+    }
+    return errors;
+  }
+
+  function normalizePreferences(value) {
+    const input = value && typeof value === "object" ? value : {};
+    const result = { ...DEFAULT_PREFERENCES };
+    BOOLEAN_PREFERENCES.forEach(function (key) {
+      if (typeof input[key] === "boolean") result[key] = input[key];
+    });
+    Object.entries(INTEGER_PREFERENCE_RANGES).forEach(function (entry) {
+      const key = entry[0];
+      const range = entry[1];
+      if (Number.isInteger(input[key]) && input[key] >= range.min && input[key] <= range.max) {
+        result[key] = input[key];
+      }
+    });
+    if (input.loadingUrlFallback === "skip" || input.loadingUrlFallback === "lastCommitted") {
+      result.loadingUrlFallback = input.loadingUrlFallback;
+    }
+    if (validatePreferences(result).length > 0) {
+      result.startupDiscoverySeconds = DEFAULT_PREFERENCES.startupDiscoverySeconds;
+      result.startupLoadingWaitSeconds = DEFAULT_PREFERENCES.startupLoadingWaitSeconds;
+      result.overallDeadlineSeconds = DEFAULT_PREFERENCES.overallDeadlineSeconds;
+      result.perTabTimeoutSeconds = DEFAULT_PREFERENCES.perTabTimeoutSeconds;
+    }
+    return result;
+  }
 
   function normalizeWorkspaceId(value) {
     if (typeof value !== "string" && typeof value !== "number") return null;
@@ -18,7 +95,7 @@
 
   function getIneligibilityReasons(tab, targetWorkspaceId, preferences) {
     const reasons = [];
-    const prefs = { ...DEFAULT_PREFERENCES, ...(preferences || {}) };
+    const prefs = normalizePreferences(preferences);
     const expectedWorkspaceId = normalizeWorkspaceId(targetWorkspaceId);
 
     if (!tab || typeof tab !== "object") return ["The browser did not provide tab metadata."];
@@ -63,13 +140,20 @@
     if (tab.incognito === true) reasons.push("Private-window tabs are protected.");
     else if (tab.incognito !== false) reasons.push("The browser did not confirm whether this tab is in a private window.");
 
-    const usePendingUrl = tab.status === "loading" && prefs.skipLoadingTabs === false &&
-      typeof tab.pendingUrl === "string" && tab.pendingUrl.length > 0;
-    const candidateUrl = usePendingUrl ? tab.pendingUrl : tab.url;
+    const loadingAttemptAllowed = tab.status === "loading" && prefs.skipLoadingTabs === false;
+    const hasPendingUrl = typeof tab.pendingUrl === "string" && tab.pendingUrl.length > 0;
+    const usePendingUrl = loadingAttemptAllowed && hasPendingUrl;
+    let candidateUrl = usePendingUrl ? tab.pendingUrl : tab.url;
+    if (loadingAttemptAllowed && !hasPendingUrl && prefs.loadingUrlFallback === "skip") {
+      reasons.push("The pending navigation URL is unavailable; this tab is skipped by the current URL fallback preference.");
+      candidateUrl = null;
+    }
     if (typeof candidateUrl !== "string" || candidateUrl.length === 0) {
-      reasons.push(usePendingUrl
-        ? "The browser did not provide a navigation URL to classify safely."
-        : "The browser did not provide a URL to classify safely.");
+      if (!(loadingAttemptAllowed && !hasPendingUrl && prefs.loadingUrlFallback === "skip")) {
+        reasons.push(usePendingUrl
+          ? "The browser did not provide a navigation URL to classify safely."
+          : "The browser did not provide a URL to classify safely.");
+      }
     } else {
       try {
         const parsedUrl = new URL(candidateUrl);
@@ -124,6 +208,10 @@
 
   const api = {
     DEFAULT_PREFERENCES,
+    BOOLEAN_PREFERENCES,
+    INTEGER_PREFERENCE_RANGES,
+    validatePreferences,
+    normalizePreferences,
     normalizeWorkspaceId,
     getIneligibilityReasons,
     evaluateTab,

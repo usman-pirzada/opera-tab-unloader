@@ -54,8 +54,10 @@ test('skips active tabs', () => {
 
 test('protects loading tabs by default but allows an explicit loading-tab opt-out', () => {
   assert.match(policy.evaluateTab(safeTab({ status: 'loading' }), '3', {}).reasons.join(' '), /loading/i);
-  assert.equal(policy.evaluateTab(safeTab({ status: 'loading' }), '3', { skipLoadingTabs: false }).eligible, true);
+  assert.equal(policy.evaluateTab(safeTab({ status: 'loading', pendingUrl: 'https://example.com/next' }), '3', { skipLoadingTabs: false }).eligible, true);
   assert.equal(policy.evaluateTab(safeTab({ status: 'loading', pendingUrl: 'opera://settings' }), '3', { skipLoadingTabs: false }).eligible, false);
+  assert.equal(policy.evaluateTab(safeTab({ status: 'loading', pendingUrl: undefined }), '3', { skipLoadingTabs: false }).eligible, false);
+  assert.equal(policy.evaluateTab(safeTab({ status: 'loading', pendingUrl: undefined }), '3', { skipLoadingTabs: false, loadingUrlFallback: 'lastCommitted' }).eligible, true);
   assert.match(policy.evaluateTab(safeTab({ status: undefined }), '3', { skipLoadingTabs: false }).reasons.join(' '), /finished loading/i);
 });
 
@@ -181,3 +183,20 @@ test('background startup cancellation is based on focused-window workspace event
   assert.match(backgroundSource, /loadingWaitMs/);
   assert.doesNotMatch(backgroundSource, /tab\.active === true && !sameWorkspace\(tab\.workspaceId, run\.workspaceId\)/);
 });;
+
+
+test('validates numeric settings and enforces the overall deadline relationship', () => {
+  const settings = { ...policy.DEFAULT_PREFERENCES };
+  assert.deepEqual(policy.validatePreferences(settings), []);
+  assert.ok(policy.validatePreferences({ ...settings, startupDiscoverySeconds: -1 }).some((message) => /startupDiscoverySeconds/.test(message)));
+  assert.ok(policy.validatePreferences({ ...settings, startupDiscoverySeconds: 30, startupLoadingWaitSeconds: 120, overallDeadlineSeconds: 60 }).some((message) => /must not exceed the overall deadline/.test(message)));
+  assert.equal(policy.normalizePreferences({ startupDiscoverySeconds: 30, startupLoadingWaitSeconds: 120, overallDeadlineSeconds: 60 }).startupDiscoverySeconds, policy.DEFAULT_PREFERENCES.startupDiscoverySeconds);
+});
+
+test('normalizes only recognized preference value types and safe URL fallback choices', () => {
+  const normalized = policy.normalizePreferences({ skipLoadingTabs: false, autoUnloadOnStartup: true, loadingUrlFallback: 'unsafe', overallDeadlineSeconds: -20 });
+  assert.equal(normalized.skipLoadingTabs, false);
+  assert.equal(normalized.autoUnloadOnStartup, true);
+  assert.equal(normalized.loadingUrlFallback, 'skip');
+  assert.equal(normalized.overallDeadlineSeconds, policy.DEFAULT_PREFERENCES.overallDeadlineSeconds);
+});
