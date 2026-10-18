@@ -1,5 +1,7 @@
 # Opera GX Workspace Tab Unloader
 
+> **DIAGNOSTIC BRANCH ONLY. Do not use this build for normal browsing.** Version 0.1.6 on this branch enables one explicitly armed individual discard attempt from a non-active workspace so the Opera GX crash can be investigated. It may crash the browser. Bulk unloading from other workspaces remains blocked. Use only a disposable temporary Opera GX profile and a throwaway HTTP/HTTPS tab with no unsaved work.
+
 A small, local-only Manifest V3 extension for reviewing tabs in Opera GX workspaces and discarding eligible tabs individually or in bulk. A discarded tab stays in the tab strip and reloads when activated.
 
 ## Features
@@ -32,7 +34,7 @@ The extension always skips:
 
 By default it also skips pinned tabs, audible tabs, and tabs marked non-auto-discardable; these three protections can be switched off in Preferences.
 
-Individual unloads in the active workspace do not show a confirmation dialog, as requested, but they always revalidate tab eligibility before calling `chrome.tabs.discard()`. Tabs in other workspaces are read-only in the popup for now, because discarding from an inactive GX workspace has coincided with full-browser exits in testing. The extension does not currently claim this is a confirmed Opera bug; this is a protective workaround pending more diagnostics. Bulk unloads require confirmation and compare the eligible set against the reviewed set before processing sequentially. The extension also verifies the browser's reported discard state after each attempt.
+Individual unloads in the active workspace do not show a confirmation dialog, as requested, but they always revalidate tab eligibility before calling `chrome.tabs.discard()`. In the stable build, tabs in other workspaces are read-only because discarding from an inactive GX workspace has coincided with full-browser exits in testing. This branch adds a separate one-time, explicitly armed individual attempt solely for controlled diagnosis. The extension does not currently claim this is a confirmed Opera bug; this is a protective workaround pending more diagnostics. Bulk unloads require confirmation and compare the eligible set against the reviewed set before processing sequentially. The extension also verifies the browser's reported discard state after each attempt.
 
 ## Compatibility notes
 
