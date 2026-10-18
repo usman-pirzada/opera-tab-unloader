@@ -18,8 +18,6 @@
     let startupSequence = 0;
     let unresolvedDiscard = null;
     let statusEnabled = true;
-    let startupCapturingWorkspace = false;
-    let startupPreRunWorkspaceIds = [];
 
     function timeoutError(operation) {
       const error = new Error(operation + " exceeded its configured time budget.");
@@ -305,54 +303,23 @@
       if (run.phase === "waiting-load") wakeRun(run);
     }
 
-    async function onTabActivated(activeInfo) {
-      const runAtEvent = startupRun;
-      const captureAtEvent = startupCapturingWorkspace;
-      if ((!runAtEvent || runAtEvent.cancelled) && !captureAtEvent) return;
+    async function onTabActivated(_activeInfo) {
+      const run = startupRun;
+      if (!run || run.cancelled) return;
 
-      // Inspect both the event tab and the active tab in the last-focused window.
-      // A switch away and back can happen before this asynchronous handler resumes;
-      // the event tab still lets us detect that switch when it belongs to the focused
-      // window. Events from an unfocused window must not cancel the startup run.
-      const [eventTabResult, focusedContextResult] = await Promise.allSettled([
-        api.tabs.get(activeInfo.tabId),
-        getActiveContext()
-      ]);
-      const eventTab = eventTabResult.status === "fulfilled" ? eventTabResult.value : null;
-      const focusedContext = focusedContextResult.status === "fulfilled" ? focusedContextResult.value : null;
-      const currentWorkspaceId = focusedContext ? focusedContext.currentWorkspaceId : null;
-      const focusedWindowId = focusedContext && focusedContext.activeTab
-        ? focusedContext.activeTab.windowId : null;
-      const eventWindowId = activeInfo && Number.isInteger(activeInfo.windowId)
-        ? activeInfo.windowId
-        : (eventTab ? eventTab.windowId : null);
-      const eventWorkspaceId = eventTab ? normalizeId(eventTab.workspaceId) : null;
-      const activationIsInFocusedWindow = Number.isInteger(eventWindowId) &&
-        Number.isInteger(focusedWindowId) && eventWindowId === focusedWindowId;
-
-      if (!runAtEvent) {
-        // Buffer focused-window activations that occur while the first startup
-        // workspace query is pending. If the event completes after a run has been
-        // created, compare against that run too so a fast switch-away/back is not lost.
-        if (captureAtEvent && activationIsInFocusedWindow) {
-          startupPreRunWorkspaceIds.push(eventWorkspaceId);
-          const activeRun = startupRun;
-          if (activeRun && !activeRun.cancelled && !sameWorkspace(eventWorkspaceId, activeRun.workspaceId)) {
-            cancelStartupRun(activeRun, eventWorkspaceId === null
-              ? "The activated workspace was unverifiable while startup was detecting the initial workspace. No tabs were unloaded."
-              : "Workspace changed while startup was detecting the initial workspace. No tabs were unloaded.");
-          }
-        }
+      // Opera can emit activation events while restoring tabs from multiple
+      // workspaces. An event tab's workspaceId alone is not proof the selected
+      // workspace changed, so inspect the actual active tab in the last-focused window.
+      let currentWorkspaceId = null;
+      try {
+        currentWorkspaceId = (await getActiveContext()).currentWorkspaceId;
+      } catch (_error) {
+        cancelStartupRun(run, "The active workspace could not be verified during startup auto-unload. Remaining tabs were not attempted.");
         return;
       }
 
-      const run = runAtEvent;
       if (run.cancelled) return;
-      if (activationIsInFocusedWindow && !sameWorkspace(eventWorkspaceId, run.workspaceId)) {
-        cancelStartupRun(run, eventWorkspaceId === null
-          ? "The activated tab's workspace became unverifiable during startup. Remaining tabs were not attempted."
-          : "Workspace changed during startup auto-unload. Remaining tabs were not attempted.");
-      } else if (currentWorkspaceId === null) {
+      if (currentWorkspaceId === null) {
         cancelStartupRun(run, "The current workspace became unverifiable during startup auto-unload. Remaining tabs were not attempted.");
       } else if (!sameWorkspace(currentWorkspaceId, run.workspaceId)) {
         cancelStartupRun(run, "Workspace changed during startup auto-unload. Remaining tabs were not attempted.");
@@ -586,7 +553,7 @@
         Date.now() + timeoutMs,
         Number.isFinite(run.deadlineAt) ? run.deadlineAt : Number.POSITIVE_INFINITY
       );
-      const quietPeriodMs = 1200;
+      const quietPeriodMs = preferences.startupQuietPeriodSeconds * 1000;
       const readinessPreferences = { ...preferences, skipLoadingTabs: false };
       run.phase = "waiting-load";
       while (!run.cancelled && Date.now() < deadline) {
@@ -638,8 +605,6 @@
     async function runStartupAutoUnload() {
       if (startupAttempted) return;
       startupAttempted = true;
-      startupCapturingWorkspace = true;
-      startupPreRunWorkspaceIds = [];
       const startupStartedAt = Date.now();
       // Start reading the active workspace immediately, before storage latency can
       // delay the startup scope snapshot.
@@ -655,8 +620,6 @@
       const preferencesPromise = loadPreferences();
       const activeResult = await activePromise;
       if (activeResult.error) {
-        startupCapturingWorkspace = false;
-        startupPreRunWorkspaceIds = [];
         await saveStartupStatus({
           state: activeResult.error && activeResult.error.operationTimedOut ? "timeout" : "skipped",
           message: "Startup auto-unload skipped because the active tab could not be read: " + errText(activeResult.error)
@@ -665,8 +628,6 @@
       }
       const active = activeResult.active;
       if (active.currentWorkspaceId === null) {
-        startupCapturingWorkspace = false;
-        startupPreRunWorkspaceIds = [];
         await saveStartupStatus({
           state: "skipped",
           message: "Startup auto-unload skipped: Opera GX did not expose a verifiable current workspace ID. No tabs were unloaded."
@@ -689,15 +650,7 @@
         lastActivityAt: Date.now(),
         deadlineAt: Number.POSITIVE_INFINITY
       };
-      const preRunWorkspaceChanged = startupPreRunWorkspaceIds.some(function (workspaceId) {
-        return workspaceId === null || !sameWorkspace(workspaceId, run.workspaceId);
-      });
-      startupPreRunWorkspaceIds = [];
-      startupCapturingWorkspace = false;
       startupRun = run;
-      if (preRunWorkspaceChanged) {
-        cancelStartupRun(run, "A different or unverifiable workspace was activated while startup was detecting the initial workspace. Auto-unload was cancelled.");
-      }
 
       try {
         const loaded = await awaitWithinDeadline(preferencesPromise, startupStartedAt + 10000, "loading startup settings");

@@ -284,27 +284,27 @@ test('activation in an unfocused window does not cancel the last-focused startup
   assert.equal(browser.store.startupStatus.state, 'completed');
 });
 
-test('a switch away and back in the same focused window still cancels the startup run', async () => {
+test('activation of another workspace tab does not cancel when the active workspace is unchanged', async () => {
   const browser = mockBrowser([
     tab({ id: 1, active: true }),
     tab({ id: 2, status: 'loading', title: 'Startup workspace tab' }),
-    tab({ id: 3, workspaceId: 'B', windowId: 1, title: 'Other workspace tab' })
+    tab({ id: 3, workspaceId: 'B', windowId: 1, title: 'Another workspace restoring tab' })
   ], {
     autoUnloadOnStartup: true,
     skipLoadingTabs: true
   });
-  const controller = createController(browser.api, policy, { discoveryMs: 10, loadingWaitMs: 3000 });
+  const controller = createController(browser.api, policy, { discoveryMs: 10, loadingWaitMs: 300 });
   controller.install();
 
-  // Simulate the activation event for workspace B being delivered after the
-  // current tab query already observes workspace A again.
+  // The event is noisy restoration metadata; it does not change the active tab
+  // returned by the browser for the last-focused window.
   setTimeout(() => browser.events.activated.fire({ tabId: 3, windowId: 1 }), 25);
   setTimeout(() => browser.update(2, { status: 'complete' }), 45);
   await controller.runStartupAutoUnload();
 
-  assert.deepEqual(browser.calls.discard, []);
-  assert.equal(browser.store.startupStatus.state, 'cancelled');
-  assert.match(browser.store.startupStatus.message, /workspace changed/i);
+  assert.deepEqual(browser.calls.discard, [2]);
+  assert.equal(browser.tabsById.get(2).discarded, true);
+  assert.equal(browser.store.startupStatus.state, 'completed');
 });
 
 test('startup switch away and back is remembered while preferences are loading', async () => {
@@ -353,11 +353,11 @@ test('a timed-out discard becomes uncertain and blocks later attempts until the 
   assert.deepEqual(browser.calls.discard, [2]);
 });
 
-test('startup cancels if a focused workspace switch occurs while the initial workspace query is delayed', async () => {
+test('startup ignores restoration activation noise while detecting the initial workspace', async () => {
   const browser = mockBrowser([
     tab({ id: 1, active: true }),
     tab({ id: 2, status: 'loading', title: 'Startup workspace tab' }),
-    tab({ id: 3, workspaceId: 'B', windowId: 1, title: 'Other workspace tab' })
+    tab({ id: 3, workspaceId: 'B', windowId: 1, title: 'Another workspace restored tab' })
   ], {
     autoUnloadOnStartup: true,
     skipLoadingTabs: true
@@ -370,16 +370,16 @@ test('startup cancels if a focused workspace switch occurs while the initial wor
     return originalQuery(queryInfo);
   };
 
-  const controller = createController(browser.api, policy, { discoveryMs: 5, loadingWaitMs: 20 });
+  const controller = createController(browser.api, policy, { discoveryMs: 5, loadingWaitMs: 50 });
   controller.install();
   const run = controller.runStartupAutoUnload();
-  setTimeout(() => browser.activate(3), 10);
-  setTimeout(() => browser.activate(1), 25);
+  setTimeout(() => browser.events.activated.fire({ tabId: 3, windowId: 1 }), 10);
+  setTimeout(() => browser.update(2, { status: 'complete' }), 45);
   await run;
 
-  assert.deepEqual(browser.calls.discard, []);
-  assert.equal(browser.store.startupStatus.state, 'cancelled');
-  assert.match(browser.store.startupStatus.message, /workspace/i);
+  assert.deepEqual(browser.calls.discard, [2]);
+  assert.equal(browser.tabsById.get(2).discarded, true);
+  assert.equal(browser.store.startupStatus.state, 'completed');
 });
 
 test('startup does not retry a replaced tab as a new candidate during the unload queue', async () => {

@@ -79,6 +79,11 @@
             <span class="setting-description">When loading-tab protection is ON, how long to wait for eligible loading tabs to finish. Range: 0–120 whole seconds. Zero means do not wait. The overall deadline may end this wait earlier.</span>
             <input id="startupLoadingWaitSeconds" class="setting-input" type="number" min="0" max="120" step="1" inputmode="numeric" required>
           </label>
+          <label class="setting-card">
+            <span class="setting-title">Quiet period <span class="default-value">{Default: 2 seconds}</span></span>
+            <span class="setting-description">During startup settling, how long relevant tab activity must be quiet before the extension proceeds. Range: 1–10 whole seconds.</span>
+            <input id="startupQuietPeriodSeconds" class="setting-input" type="number" min="1" max="10" step="1" inputmode="numeric" required>
+          </label>
           <label class="setting-card critical-card">
             <span class="setting-title">Overall operation deadline <span class="default-value">{Default: 60 seconds}</span> <span class="critical-label">Safety limit</span></span>
             <span class="setting-description">Hard limit for a startup run or manual bulk operation, including preparation and the unload queue. Range: 10–300 whole seconds. Discovery, loading wait, and at least one per-tab attempt must fit inside this limit. An in-flight native request cannot be retroactively cancelled.</span>
@@ -90,7 +95,7 @@
             <input id="perTabTimeoutSeconds" class="setting-input" type="number" min="2" max="30" step="1" inputmode="numeric" required>
           </label>
         </div>
-        <p class="relationship-note">Validation rule: startup discovery plus loading wait must fit inside the overall deadline, and the per-tab time budget cannot exceed the overall deadline.</p>
+        <p class="relationship-note">Validation rule: startup discovery, loading wait, quiet period, and at least one per-tab attempt must fit inside the overall deadline.</p>
       </section>
 
       <section class="settings-group" aria-labelledby="interface-title">

@@ -10,6 +10,7 @@
     autoUnloadOnStartup: false,
     startupDiscoverySeconds: 8,
     startupLoadingWaitSeconds: 20,
+    startupQuietPeriodSeconds: 2,
     overallDeadlineSeconds: 60,
     perTabTimeoutSeconds: 5,
     showStatusIndicator: true
@@ -27,6 +28,7 @@
   const INTEGER_PREFERENCE_RANGES = Object.freeze({
     startupDiscoverySeconds: Object.freeze({ min: 2, max: 30 }),
     startupLoadingWaitSeconds: Object.freeze({ min: 0, max: 120 }),
+    startupQuietPeriodSeconds: Object.freeze({ min: 1, max: 10 }),
     overallDeadlineSeconds: Object.freeze({ min: 10, max: 300 }),
     perTabTimeoutSeconds: Object.freeze({ min: 2, max: 30 })
   });
@@ -49,10 +51,12 @@
     }
     if (Number.isInteger(input.startupDiscoverySeconds) &&
         Number.isInteger(input.startupLoadingWaitSeconds) &&
+        Number.isInteger(input.startupQuietPeriodSeconds) &&
         Number.isInteger(input.perTabTimeoutSeconds) &&
         Number.isInteger(input.overallDeadlineSeconds) &&
-        input.startupDiscoverySeconds + input.startupLoadingWaitSeconds + input.perTabTimeoutSeconds > input.overallDeadlineSeconds) {
-      errors.push("Startup discovery, loading wait, and at least one per-tab attempt must fit within the overall deadline.");
+        input.startupDiscoverySeconds + input.startupLoadingWaitSeconds + input.startupQuietPeriodSeconds +
+          input.perTabTimeoutSeconds > input.overallDeadlineSeconds) {
+      errors.push("Startup discovery, loading wait, quiet period, and at least one per-tab attempt must fit within the overall deadline.");
     }
     if (Number.isInteger(input.perTabTimeoutSeconds) &&
         Number.isInteger(input.overallDeadlineSeconds) &&
@@ -81,6 +85,7 @@
     if (validatePreferences(result).length > 0) {
       result.startupDiscoverySeconds = DEFAULT_PREFERENCES.startupDiscoverySeconds;
       result.startupLoadingWaitSeconds = DEFAULT_PREFERENCES.startupLoadingWaitSeconds;
+      result.startupQuietPeriodSeconds = DEFAULT_PREFERENCES.startupQuietPeriodSeconds;
       result.overallDeadlineSeconds = DEFAULT_PREFERENCES.overallDeadlineSeconds;
       result.perTabTimeoutSeconds = DEFAULT_PREFERENCES.perTabTimeoutSeconds;
     }

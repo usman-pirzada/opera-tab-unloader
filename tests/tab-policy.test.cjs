@@ -175,9 +175,10 @@ test('background coordinator checks the active workspace before every discard at
   assert.match(backgroundSource, /api\.tabs\.discard\(tabId\)/);
 });
 
-test('background startup cancellation is based on focused-window workspace events', () => {
-  assert.ok(backgroundSource.includes('const [eventTabResult, focusedContextResult] = await Promise.allSettled(['));
-  assert.ok(backgroundSource.includes('activationIsInFocusedWindow && !sameWorkspace(eventWorkspaceId, run.workspaceId)'));
+test('background startup cancellation verifies the actual current workspace', () => {
+  assert.match(backgroundSource, /async function onTabActivated\(_activeInfo\)/);
+  assert.match(backgroundSource, /currentWorkspaceId = \(await getActiveContext\(\)\)\.currentWorkspaceId/);
+  assert.doesNotMatch(backgroundSource, /startupCapturingWorkspace|startupPreRunWorkspaceIds|activationIsInFocusedWindow/);
   assert.ok(backgroundSource.includes('if (currentWorkspaceId === null)'));
   assert.ok(backgroundSource.includes('if (!sameWorkspace(currentWorkspaceId, run.workspaceId))'));
   assert.match(backgroundSource, /Workspace changed during startup auto-unload/);
@@ -192,7 +193,7 @@ test('validates numeric settings and enforces the overall deadline relationship'
   assert.deepEqual(policy.validatePreferences(settings), []);
   assert.ok(policy.validatePreferences({ ...settings, startupDiscoverySeconds: -1 }).some((message) => /startupDiscoverySeconds/.test(message)));
   assert.ok(policy.validatePreferences({ ...settings, startupDiscoverySeconds: 30, startupLoadingWaitSeconds: 120, overallDeadlineSeconds: 60 }).some((message) => /must fit within the overall deadline/.test(message)));
-  assert.ok(policy.validatePreferences({ ...settings, startupDiscoverySeconds: 8, startupLoadingWaitSeconds: 0, perTabTimeoutSeconds: 5, overallDeadlineSeconds: 10 }).some((message) => /at least one per-tab attempt/.test(message)));
+  assert.ok(policy.validatePreferences({ ...settings, startupDiscoverySeconds: 8, startupLoadingWaitSeconds: 0, startupQuietPeriodSeconds: 2, perTabTimeoutSeconds: 5, overallDeadlineSeconds: 10 }).some((message) => /at least one per-tab attempt/.test(message)));
   assert.equal(policy.normalizePreferences({ startupDiscoverySeconds: 30, startupLoadingWaitSeconds: 120, overallDeadlineSeconds: 60 }).startupDiscoverySeconds, policy.DEFAULT_PREFERENCES.startupDiscoverySeconds);
 });
 
