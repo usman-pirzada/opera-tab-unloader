@@ -64,10 +64,13 @@
     ui.confirmBulk.disabled = busy;
     ui.retry.disabled = busy;
     ui.retry.hidden = Boolean(workspaceData);
-    ui.unloadAll.disabled = busy || !snapshot ||
+    const canUnloadSelectedWorkspace = snapshot &&
+      policy.isSameWorkspace(snapshot.workspace.id, snapshot.currentWorkspaceId);
+    ui.unloadAll.disabled = busy || !snapshot || !canUnloadSelectedWorkspace ||
       snapshot.unknownWorkspaceCount > 0 || snapshot.eligibleTabs.length === 0;
     ui.tabList.querySelectorAll("button").forEach((button) => {
-      button.disabled = busy;
+      // Refreshing or changing the busy state must never unlock read-only rows.
+      button.disabled = busy || button.dataset.requiresCurrentWorkspace === "true";
     });
     document.querySelectorAll(".preference-toggle").forEach((button) => {
       button.disabled = busy;
@@ -218,12 +221,18 @@
       const actions = document.createElement("div");
       actions.className = "tab-actions";
       const button = document.createElement("button");
+      const workspaceIsCurrent = policy.isSameWorkspace(workspaceId, snapshot.currentWorkspaceId);
       button.type = "button";
       button.className = "tab-action-button";
-      button.textContent = "Unload tab";
-      button.setAttribute("aria-label", "Unload tab: " + (tab.title || "Untitled tab"));
-      button.disabled = busy;
-      button.addEventListener("click", () => handleIndividual(tab.id, workspaceId));
+      button.dataset.requiresCurrentWorkspace = String(!workspaceIsCurrent);
+      button.textContent = workspaceIsCurrent ? "Unload tab" : "Switch workspace to unload";
+      button.setAttribute("aria-label", workspaceIsCurrent
+        ? "Unload tab: " + (tab.title || "Untitled tab")
+        : "Switch to this workspace in Opera GX before unloading " + (tab.title || "this tab"));
+      button.disabled = busy || !workspaceIsCurrent;
+      if (workspaceIsCurrent) {
+        button.addEventListener("click", () => handleIndividual(tab.id, workspaceId));
+      }
       actions.appendChild(button);
       row.appendChild(actions);
     }
@@ -235,14 +244,17 @@
     workspaceData = data;
     renderWorkspaceOptions(data);
 
-    const isCurrentWorkspace = sameId(nextSnapshot.workspace.id, data.currentWorkspaceId);
+    const isCurrentWorkspace = policy.isSameWorkspace(nextSnapshot.workspace.id, data.currentWorkspaceId);
     ui.workspaceLabel.textContent = "Managing " + displayWorkspaceName(nextSnapshot.workspace);
+    ui.workspaceScopeNote.classList.toggle("read-only-note", !isCurrentWorkspace);
     ui.workspaceScopeNote.textContent = isCurrentWorkspace
-      ? "Default selection · Current workspace"
-      : "Selected workspace · Browser workspace switching is not required.";
-    ui.summaryWorkspaceName.textContent = isCurrentWorkspace ? "Current" : "Selected";
+      ? "Current workspace · Unloading enabled."
+      : "Read-only preview. Switch to this workspace in Opera GX before unloading tabs.";
+    ui.summaryWorkspaceName.textContent = isCurrentWorkspace ? "Current" : "Read-only";
     ui.tabSectionTitle.textContent = "Tabs in " + displayWorkspaceName(nextSnapshot.workspace);
-    ui.tabSectionNote.textContent = "Each tab is checked again before it is unloaded.";
+    ui.tabSectionNote.textContent = isCurrentWorkspace
+      ? "Eligible tabs are checked again immediately before unloading."
+      : "Read-only preview: eligibility is shown, but unloading is disabled until you switch to this workspace in Opera GX.";
     ui.tabCount.textContent = String(nextSnapshot.workspaceTabs.length);
     ui.eligibleCount.textContent = String(nextSnapshot.eligibleTabs.length);
     ui.skippedCount.textContent = String(nextSnapshot.skippedTabs.length);
@@ -265,7 +277,9 @@
 
     ui.unloadAll.textContent = nextSnapshot.unknownWorkspaceCount > 0
       ? "Bulk unload blocked: unknown workspace IDs"
-      : "Unload " + nextSnapshot.eligibleTabs.length + " eligible tab" + (nextSnapshot.eligibleTabs.length === 1 ? "" : "s");
+      : !isCurrentWorkspace
+        ? "Read-only: switch workspace to unload"
+        : "Unload " + nextSnapshot.eligibleTabs.length + " eligible tab" + (nextSnapshot.eligibleTabs.length === 1 ? "" : "s");
     updateControls();
   }
 
@@ -283,9 +297,11 @@
       const next = createSnapshot(data, selectedWorkspaceId);
       render(next, data);
 
-      if (nextSnapshotHasUnknownWorkspace(next)) {
+      if (next.unknownWorkspaceCount > 0) {
         setStatus("Safety hold: " + data.unknownWorkspaceCount +
           " tab(s) have unknown workspace identity. Bulk unloading is blocked.");
+      } else if (!policy.isSameWorkspace(next.workspace.id, next.currentWorkspaceId)) {
+        setStatus("Read-only preview: switch to “" + next.workspace.name + "” in Opera GX to unload its tabs.");
       } else {
         setStatus("Checked " + next.workspaceTabs.length + " tab(s) in " +
           next.workspace.name + ": " + next.eligibleTabs.length + " eligible, " +
@@ -325,14 +341,13 @@
     }
   }
 
-  function nextSnapshotHasUnknown(nextSnapshot) {
-    return nextSnapshot.unknownWorkspaceCount > 0;
-  }
-
   async function inspectTab(tabId, expectedWorkspaceId, requireCompleteMap) {
     const data = await readWorkspaceData();
     if (!data.workspaces.some((item) => sameId(item.id, expectedWorkspaceId))) {
       throw new Error("The selected workspace no longer exists. No tab was unloaded.");
+    }
+    if (!policy.isSameWorkspace(expectedWorkspaceId, data.currentWorkspaceId)) {
+      throw new Error("The selected workspace is not active in Opera GX. Switch to it in the browser before unloading. No tab was unloaded.");
     }
     if (requireCompleteMap && data.unknownWorkspaceCount > 0) {
       throw new Error("Workspace identity became ambiguous during bulk unloading. Remaining tabs were not attempted.");
@@ -354,13 +369,30 @@
       };
     }
 
-    await chrome.tabs.discard(tabId);
-    const after = await chrome.tabs.get(tabId);
-    if (after.discarded !== true) {
+    try {
+      await chrome.tabs.discard(tabId);
+    } catch (error) {
+      const detail = error instanceof Error && error.message
+        ? error.message
+        : "The browser returned an unknown API error.";
+      throw new Error("Opera GX rejected the unload request: " + detail);
+    }
+
+    let after;
+    try {
+      after = await chrome.tabs.get(tabId);
+    } catch (error) {
+      const detail = error instanceof Error && error.message
+        ? error.message
+        : "The browser returned an unknown API error.";
+      throw new Error("Opera GX returned from the unload request, but the final tab state could not be verified: " + detail);
+    }
+
+    if (!after || after.discarded !== true) {
       return {
         ok: false,
         skipped: false,
-        message: (tab.title || "Tab") + ": Opera GX did not confirm that it was discarded."
+        message: (tab.title || "Tab") + ": the unload request returned, but Opera GX still does not confirm that the tab is discarded."
       };
     }
     return { ok: true, skipped: false, message: (tab.title || "Tab") + " was unloaded." };
@@ -398,6 +430,11 @@
       const latest = createSnapshot(data, selectedWorkspaceId);
       render(latest, data);
 
+      if (!policy.isSameWorkspace(latest.workspace.id, latest.currentWorkspaceId)) {
+        clearBulkConfirmation();
+        setStatus("Read-only preview: switch to “" + latest.workspace.name + "” in Opera GX before unloading tabs.");
+        return;
+      }
       if (latest.unknownWorkspaceCount > 0) {
         clearBulkConfirmation();
         setStatus("Bulk unload blocked because " + latest.unknownWorkspaceCount +
@@ -442,6 +479,9 @@
 
     try {
       const data = await readWorkspaceData();
+      if (!policy.isSameWorkspace(operation.workspaceId, data.currentWorkspaceId)) {
+        throw new Error("The active Opera GX workspace changed before bulk unloading. The operation was cancelled; switch to the target workspace and review again.");
+      }
       if (data.unknownWorkspaceCount > 0) {
         throw new Error("Bulk unload stopped because one or more tabs have unknown workspace identity.");
       }
@@ -468,12 +508,10 @@
         } catch (error) {
           failed++;
           messages.push(error instanceof Error ? error.message : "A tab unload failed.");
-          if (error instanceof Error &&
-              (error.message.includes("workspace no longer exists") ||
-               error.message.includes("identity became ambiguous"))) {
-            aborted = true;
-            break;
-          }
+          // A thrown error means the target or browser API state is uncertain.
+          // Stop rather than attempting more native discards in this batch.
+          aborted = true;
+          break;
         }
       }
 

@@ -83,6 +83,12 @@
     return { eligible: reasons.length === 0, reasons };
   }
 
+  function isSameWorkspace(targetWorkspaceId, currentWorkspaceId) {
+    const targetId = normalizeWorkspaceId(targetWorkspaceId);
+    const currentId = normalizeWorkspaceId(currentWorkspaceId);
+    return targetId !== null && currentId !== null && targetId === currentId;
+  }
+
   function sortEvaluatedTabs(items, mode) {
     const indexedItems = items.map((item, index) => ({
       item,
@@ -110,6 +116,7 @@
     normalizeWorkspaceId,
     getIneligibilityReasons,
     evaluateTab,
+    isSameWorkspace,
     sortEvaluatedTabs
   };
   root.TabPolicy = api;

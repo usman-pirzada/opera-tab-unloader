@@ -136,4 +136,5 @@ p { line-height: 1.45; }
 .tab-action-button { min-height: 32px; padding: 6px 10px; border: 1px solid var(--accent); border-radius: 8px; background: transparent; color: var(--accent); font-size: 12px; font-weight: 800; }
 .tab-action-button:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 9%, Canvas 91%); }
 .empty-state { padding: 16px 12px; border: 1px dashed var(--border); border-radius: 9px; color: var(--muted); font-size: 12px; line-height: 1.45; text-align: center; }
+#workspace-scope-note.read-only-note { color: var(--accent); font-weight: 800; }
 [hidden] { display: none !important; }

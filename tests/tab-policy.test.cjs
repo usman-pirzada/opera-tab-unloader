@@ -1,6 +1,9 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const policy = require('../src/tab-policy.js');
+const fs = require('node:fs');
+const path = require('node:path');
+const popupSource = fs.readFileSync(path.join(__dirname, '../src/popup.js'), 'utf8');
 
 function safeTab(overrides = {}) {
   return {
@@ -130,4 +133,37 @@ test('tab-order sorting preserves browser query order', () => {
     { tab: { id: 3 }, index: 1, evaluation: { eligible: true } }
   ];
   assert.deepEqual(policy.sortEvaluatedTabs(items, 'tab-order').map((item) => item.tab.id), [2, 3, 1]);
+});
+
+test('same-workspace comparison normalizes IDs and fails closed on missing identity', () => {
+  assert.equal(policy.isSameWorkspace('3', '3'), true);
+  assert.equal(policy.isSameWorkspace(3, '3'), true);
+  assert.equal(policy.isSameWorkspace('4', '3'), false);
+  assert.equal(policy.isSameWorkspace(undefined, '3'), false);
+  assert.equal(policy.isSameWorkspace('3', null), false);
+});
+
+test('non-current workspace rows remain disabled through control refreshes', () => {
+  assert.match(popupSource, /button\.dataset\.requiresCurrentWorkspace = String\(!workspaceIsCurrent\)/);
+  assert.match(popupSource, /button\.disabled = busy \|\| button\.dataset\.requiresCurrentWorkspace === "true"/);
+  assert.match(popupSource, /Read-only preview\. Switch to this workspace in Opera GX before unloading tabs\./);
+  assert.match(popupSource, /Read-only: switch workspace to unload/);
+});
+
+test('individual and bulk discard paths require the target workspace to be current', () => {
+  const individualGuard = popupSource.indexOf(
+    'if (!policy.isSameWorkspace(expectedWorkspaceId, data.currentWorkspaceId))'
+  );
+  const discardCall = popupSource.indexOf('await chrome.tabs.discard(tabId)');
+  assert.ok(individualGuard >= 0, 'individual preflight checks the active workspace');
+  assert.ok(discardCall > individualGuard, 'workspace guard appears before tabs.discard');
+
+  const bulkReviewGuard = popupSource.indexOf(
+    'if (!policy.isSameWorkspace(latest.workspace.id, latest.currentWorkspaceId))'
+  );
+  const bulkQueue = popupSource.indexOf('pendingBulk = {');
+  assert.ok(bulkReviewGuard >= 0 && bulkReviewGuard < bulkQueue,
+    'bulk review blocks read-only workspaces before queuing candidates');
+
+  assert.doesNotMatch(popupSource, /recordDiagnostic|diagnosticEvents|DIAGNOSTIC_KEY|export-diagnostics-button/);
 });
