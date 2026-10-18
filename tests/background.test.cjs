@@ -329,3 +329,21 @@ test('startup switch away and back is remembered while preferences are loading',
   assert.equal(browser.store.startupStatus.state, 'cancelled');
   assert.match(browser.store.startupStatus.message, /workspace changed/i);
 });
+
+test('a timed-out discard becomes uncertain and blocks later attempts until the request settles', async () => {
+  const browser = mockBrowser(
+    [tab({ id: 1, active: true }), tab({ id: 2 }), tab({ id: 3, title: 'Later tab' })],
+    {},
+    async () => new Promise(() => {})
+  );
+  const controller = createController(browser.api, policy);
+  const preferences = { ...policy.DEFAULT_PREFERENCES, perTabTimeoutSeconds: 2 };
+
+  const result = await controller.inspectAndDiscard(2, 'A', preferences, true, null);
+  assert.equal(result.state, 'uncertain');
+  assert.match(result.message, /exceeded its time budget/i);
+  const later = await controller.inspectAndDiscard(3, 'A', preferences, true, null);
+  assert.equal(later.state, 'aborted');
+  assert.match(later.message, /previous discard request/i);
+  assert.deepEqual(browser.calls.discard, [2]);
+});

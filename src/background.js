@@ -670,11 +670,14 @@
         try {
           (await awaitWithinDeadline(
             api.tabs.query({}),
-            Math.min(run.deadlineAt, Date.now() + (options && Number.isFinite(options.discoveryMs) ? options.discoveryMs : preferences.startupDiscoverySeconds * 1000)),
+            run.deadlineAt,
             "discovering restored tabs"
           )).forEach(function (tab) { addCandidate(run, tab); });
         } catch (error) {
-          await saveStartupStatus({ state: "failed", message: "Startup auto-unload could not enumerate tabs: " + errText(error) });
+          await saveStartupStatus({
+            state: error && error.operationTimedOut ? "timeout" : "failed",
+            message: "Startup auto-unload could not enumerate tabs: " + errText(error)
+          });
           return;
         }
 
@@ -824,7 +827,7 @@
         });
       } catch (error) {
         await saveStartupStatus({
-          state: run.cancelled ? "cancelled" : "failed",
+          state: run.cancelled ? "cancelled" : (error && error.operationTimedOut ? "timeout" : "failed"),
           message: (run.cancelReason ? run.cancelReason + " " : "") + "Startup auto-unload ended safely: " + errText(error)
         });
       } finally {

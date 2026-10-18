@@ -168,7 +168,7 @@ test('popup delegates discards to the background coordinator and listens for liv
 
 test('background coordinator checks the active workspace before every discard attempt', () => {
   assert.match(backgroundSource, /async function inspectAndDiscard/);
-  assert.match(backgroundSource, /latestWorkspaceId = \(await getActiveContext\(\)\)\.currentWorkspaceId/);
+  assert.match(backgroundSource, /latestWorkspaceId = \(await getActiveContext\(tabDeadlineAt\)\)\.currentWorkspaceId/);
   assert.match(backgroundSource, /if \(!sameWorkspace\(targetWorkspaceId, latestWorkspaceId\)\)/);
   assert.match(backgroundSource, /await api\.tabs\.discard\(tabId\)/);
 });
