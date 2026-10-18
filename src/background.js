@@ -310,11 +310,28 @@
       });
     }
 
-    function cancelStartupRun(run, reason) {
+    function cancelRun(run, reason) {
       if (!run || run.cancelled) return;
       run.cancelled = true;
       run.cancelReason = reason || "The active workspace changed.";
       wakeRun(run);
+    }
+
+    function cancelStartupRun(run, reason) {
+      cancelRun(run, reason);
+    }
+
+    function getActiveRuns() {
+      return [startupRun, manualAdaptiveRun].filter(function (run) {
+        return run && !run.cancelled;
+      });
+    }
+
+    function signalRunActivity(run) {
+      if (!run || run.cancelled) return;
+      run.updateGeneration += 1;
+      run.lastActivityAt = Date.now();
+      if (run.phase === "monitoring" || run.phase === "waiting-load") wakeRun(run);
     }
 
     async function waitForDurationInChunks(run, milliseconds) {
@@ -331,62 +348,64 @@
     }
 
     function onTabCreated(tab) {
-      const run = startupRun;
-      if (!run || run.cancelled || !run.collecting) return;
-      const wasCandidate = run.candidates.has(tab && tab.id);
-      addCandidate(run, tab);
-      if (!wasCandidate && tab && run.candidates.has(tab.id)) {
-        run.updateGeneration += 1;
-        run.lastActivityAt = Date.now();
-        if (run.phase === "waiting-load") wakeRun(run);
-      }
+      getActiveRuns().forEach(function (run) {
+        if (!run.collecting) return;
+        const wasCandidate = run.candidates.has(tab && tab.id);
+        addCandidate(run, tab);
+        if (!wasCandidate && tab && run.candidates.has(tab.id)) signalRunActivity(run);
+      });
     }
 
     function onTabUpdated(tabId, _changeInfo, tab) {
-      const run = startupRun;
-      if (!run || run.cancelled) return;
-      if (run.collecting) addCandidate(run, tab);
-      if (run.candidates.has(tabId)) {
-        run.updateGeneration += 1;
-        run.lastActivityAt = Date.now();
-        if (run.phase === "waiting-load") wakeRun(run);
-      }
+      getActiveRuns().forEach(function (run) {
+        const wasCandidate = run.candidates.has(tabId);
+        if (run.collecting) addCandidate(run, tab);
+        if (wasCandidate || sameWorkspace(tab && tab.workspaceId, run.workspaceId)) {
+          signalRunActivity(run);
+        }
+      });
     }
 
     function onTabRemoved(tabId) {
-      const run = startupRun;
-      if (!run || run.cancelled || !run.candidates.has(tabId)) return;
-      run.candidates.delete(tabId);
-      run.updateGeneration += 1;
-      run.lastActivityAt = Date.now();
-      if (run.phase === "waiting-load") wakeRun(run);
+      getActiveRuns().forEach(function (run) {
+        if (!run.candidates.has(tabId)) return;
+        run.candidates.delete(tabId);
+        signalRunActivity(run);
+      });
     }
 
     async function onTabActivated(_activeInfo) {
-      const run = startupRun;
-      if (!run || run.cancelled) return;
+      const runs = getActiveRuns();
+      if (!runs.length) return;
 
-      // Opera can emit activation events while restoring tabs from multiple
-      // workspaces. An event tab's workspaceId alone is not proof the selected
-      // workspace changed, so inspect the actual active tab in the last-focused window.
+      // Only the currently active tab in the last-focused window is authoritative.
+      // Opera may emit noisy activation events for tabs restored in other workspaces.
       let currentWorkspaceId = null;
       try {
         currentWorkspaceId = (await getActiveContext()).currentWorkspaceId;
       } catch (_error) {
-        cancelStartupRun(run, "The active workspace could not be verified during startup auto-unload. Remaining tabs were not attempted.");
+        runs.forEach(function (run) {
+          cancelRun(run, run.kind === "startup"
+            ? "The active workspace could not be verified during startup auto-unload. Remaining tabs were not attempted."
+            : "The active workspace could not be verified during adaptive bulk unloading. Remaining tabs were not attempted.");
+        });
         return;
       }
 
-      if (run.cancelled) return;
-      if (currentWorkspaceId === null) {
-        cancelStartupRun(run, "The current workspace became unverifiable during startup auto-unload. Remaining tabs were not attempted.");
-      } else if (!sameWorkspace(currentWorkspaceId, run.workspaceId)) {
-        cancelStartupRun(run, "Workspace changed during startup auto-unload. Remaining tabs were not attempted.");
-      } else {
-        run.updateGeneration += 1;
-        run.lastActivityAt = Date.now();
-        if (run.phase === "waiting-load") wakeRun(run);
-      }
+      runs.forEach(function (run) {
+        if (run.cancelled) return;
+        if (currentWorkspaceId === null) {
+          cancelRun(run, run.kind === "startup"
+            ? "The current workspace became unverifiable during startup auto-unload. Remaining tabs were not attempted."
+            : "The current workspace became unverifiable during adaptive bulk unloading. Remaining tabs were not attempted.");
+        } else if (!sameWorkspace(currentWorkspaceId, run.workspaceId)) {
+          cancelRun(run, run.kind === "startup"
+            ? "Workspace changed during startup auto-unload. Remaining tabs were not attempted."
+            : "Workspace changed during adaptive bulk unloading. Remaining tabs were not attempted.");
+        } else {
+          signalRunActivity(run);
+        }
+      });
     }
 
     async function inspectAndDiscard(tabId, targetWorkspaceId, preferences, requireCompleteMap, run, operation) {
@@ -423,7 +442,9 @@
         return { state: "aborted", message: "The active workspace ID is unavailable. No further tabs were attempted." };
       }
       if (!sameWorkspace(targetWorkspaceId, context.currentWorkspaceId)) {
-        if (run) cancelStartupRun(run, "Workspace changed during startup auto-unload. Remaining tabs were not attempted.");
+        if (run) cancelRun(run, run.kind === "startup"
+          ? "Workspace changed during startup auto-unload. Remaining tabs were not attempted."
+          : "Workspace changed during adaptive bulk unloading. Remaining tabs were not attempted.");
         return { state: "aborted", message: "The active workspace changed. Remaining tabs were not attempted." };
       }
       if (requireCompleteMap && context.unknownWorkspaceCount > 0) {
@@ -462,7 +483,9 @@
         return { state: "aborted", message: run.cancelReason || "Startup auto-unload was cancelled." };
       }
       if (!sameWorkspace(targetWorkspaceId, latestWorkspaceId)) {
-        if (run) cancelStartupRun(run, "Workspace changed during startup auto-unload. Remaining tabs were not attempted.");
+        if (run) cancelRun(run, run.kind === "startup"
+          ? "Workspace changed during startup auto-unload. Remaining tabs were not attempted."
+          : "Workspace changed during adaptive bulk unloading. Remaining tabs were not attempted.");
         return { state: "aborted", message: "The active workspace changed immediately before unloading. Remaining tabs were not attempted." };
       }
 
@@ -483,14 +506,15 @@
           return {
             state: "uncertain",
             message: "The unload request for “" + (tab.title || "Tab") +
-              "” exceeded its time budget. Its outcome is uncertain; no further tabs were attempted."
+              "” exceeded its time budget. Its outcome is uncertain; no further tabs were attempted.",
+            attempted: true
           };
         }
         discardError = error;
       }
 
       if (discardResult && discardResult.discarded === true) {
-        return { state: "success", message: "\"" + (tab.title || "Tab") + "\" was unloaded." };
+        return { state: "success", message: "\"" + (tab.title || "Tab") + "\" was unloaded.", attempted: true };
       }
 
       let after;
@@ -502,17 +526,19 @@
         };
       }
       if (after && after.discarded === true) {
-        return { state: "success", message: "\"" + (after.title || tab.title || "Tab") + "\" was unloaded." };
+        return { state: "success", message: "\"" + (after.title || tab.title || "Tab") + "\" was unloaded.", attempted: true };
       }
       if (after && after.discarded === false) {
         return {
           state: "failure",
+          attempted: true,
           message: "\"" + (after.title || tab.title || "Tab") + "\" was not discarded." +
             (discardError ? " Opera GX rejected the request: " + errText(discardError) : "")
         };
       }
       return {
         state: "uncertain",
+        attempted: true,
         message: "Unload outcome for \"" + (tab.title || "Tab") + "\" is uncertain; the final discard state was not reported."
       };
     }
