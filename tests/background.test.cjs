@@ -115,6 +115,10 @@ function mockBrowser(initialTabs, savedPrefs = {}, discardImpl) {
       if (!value) throw new Error('Cannot update unknown tab ' + id);
       Object.assign(value, changes);
       events.updated.fire(id, changes, clone(value));
+    },
+    create(value) {
+      tabsById.set(value.id, { ...value });
+      events.created.fire(clone(value));
     }
   };
 }
@@ -175,13 +179,18 @@ test('startup auto-unload cancels when the user switches workspaces during resto
     skipLoadingTabs: true,
     lastActiveWorkspaceId: 'A'
   });
-  const controller = createController(browser.api, policy, { discoveryMs: 120, loadingWaitMs: 500 });
+  const controller = createController(browser.api, policy, { discoveryMs: 10, loadingWaitMs: 500 });
   controller.install();
 
   const run = controller.runStartupAutoUnload();
-  setTimeout(() => browser.activate(3), 25);
+  let switchedDuringLoadingWait = false;
+  setTimeout(() => {
+    switchedDuringLoadingWait = controller.getStartupRun()?.phase === 'waiting-load';
+    browser.activate(3);
+  }, 50);
   await run;
 
+  assert.equal(switchedDuringLoadingWait, true);
   assert.deepEqual(browser.calls.discard, []);
   assert.equal(browser.store.startupStatus.state, 'cancelled');
   assert.match(browser.store.startupStatus.message, /workspace changed/i);
@@ -205,4 +214,26 @@ test('startup waits for loading tabs to complete before attempting them by defau
   assert.deepEqual(browser.calls.discard, [2]);
   assert.equal(browser.tabsById.get(2).discarded, true);
   assert.equal(browser.store.startupStatus.state, 'completed');
+});
+
+
+test('startup collects tabs created late during the loading wait', async () => {
+  const browser = mockBrowser([
+    tab({ id: 1, active: true }),
+    tab({ id: 2, status: 'loading', title: 'First restoring tab' })
+  ], {
+    autoUnloadOnStartup: true,
+    skipLoadingTabs: true,
+    lastActiveWorkspaceId: 'A'
+  });
+  const controller = createController(browser.api, policy, { discoveryMs: 5, loadingWaitMs: 250 });
+  controller.install();
+
+  setTimeout(() => browser.create(tab({ id: 3, status: 'complete', title: 'Late restored tab' })), 25);
+  setTimeout(() => browser.update(2, { status: 'complete' }), 45);
+  await controller.runStartupAutoUnload();
+
+  assert.deepEqual(browser.calls.discard, [2, 3]);
+  assert.equal(browser.tabsById.get(2).discarded, true);
+  assert.equal(browser.tabsById.get(3).discarded, true);
 });

@@ -81,8 +81,13 @@
       if (run && typeof run.wake === "function") run.wake();
     }
 
-    function waitForSignal(run, milliseconds) {
+    function waitForSignal(run, milliseconds, observedGeneration) {
       return new Promise(function (resolve) {
+        if (run.cancelled ||
+            (Number.isInteger(observedGeneration) && run.updateGeneration !== observedGeneration)) {
+          resolve();
+          return;
+        }
         let done = false;
         let timer;
         const finish = function () {
@@ -94,6 +99,9 @@
         };
         run.wake = finish;
         timer = setTimeout(finish, Math.max(0, milliseconds));
+        // Close the small race between checking the generation and registering wake.
+        if (run.cancelled ||
+            (Number.isInteger(observedGeneration) && run.updateGeneration !== observedGeneration)) finish();
       });
     }
 
@@ -110,7 +118,14 @@
     }
 
     function onTabCreated(tab) {
-      addCandidate(startupRun, tab);
+      const run = startupRun;
+      if (!run || run.cancelled || !run.collecting) return;
+      const wasCandidate = run.candidates.has(tab && tab.id);
+      addCandidate(run, tab);
+      if (!wasCandidate && tab && run.candidates.has(tab.id)) {
+        run.updateGeneration += 1;
+        if (run.phase === "waiting-load") wakeRun(run);
+      }
     }
 
     function onTabUpdated(tabId, _changeInfo, tab) {
@@ -310,11 +325,12 @@
       return { ok: true, context: context };
     }
 
-    async function waitForLoadingCandidates(run, candidateIds, timeoutMs) {
+    async function waitForLoadingCandidates(run, timeoutMs) {
       const deadline = Date.now() + timeoutMs;
       run.phase = "waiting-load";
       while (!run.cancelled && Date.now() < deadline) {
         const generation = run.updateGeneration;
+        const candidateIds = Array.from(run.candidates);
         let loadingFound = false;
         for (const tabId of candidateIds) {
           if (run.cancelled) return false;
@@ -328,11 +344,11 @@
             // A tab closed during restoration is no longer a candidate.
           }
         }
-        if (!loadingFound) return true;
         if (generation !== run.updateGeneration) continue;
+        if (!loadingFound) return true;
         const remaining = deadline - Date.now();
         if (remaining <= 0) break;
-        await waitForSignal(run, remaining);
+        await waitForSignal(run, remaining, generation);
       }
       return false;
     }
@@ -425,16 +441,33 @@
         }
 
         latest.context.allTabs.forEach(function (tab) { addCandidate(run, tab); });
-        run.collecting = false;
-        const candidateIds = Array.from(run.candidates).sort(function (a, b) { return a - b; });
 
-        if (preferences.skipLoadingTabs && candidateIds.length) {
-          run.loadingWaitExpired = !(await waitForLoadingCandidates(run, candidateIds, loadingWaitMs));
+        // Keep collecting created/restored tabs through the loading grace period.
+        // This catches tabs that Opera creates after the first tab query.
+        if (preferences.skipLoadingTabs && run.candidates.size) {
+          run.loadingWaitExpired = !(await waitForLoadingCandidates(run, loadingWaitMs));
         }
         if (run.cancelled) {
           await saveStartupStatus({ state: "cancelled", message: run.cancelReason + " No further tabs were attempted." });
           return;
         }
+
+        const finalSnapshot = await startupContextStillCurrent(run);
+        if (!finalSnapshot.ok) {
+          await saveStartupStatus({ state: "cancelled", message: run.cancelReason + " No further tabs were attempted." });
+          return;
+        }
+        if (finalSnapshot.context.unknownWorkspaceCount > 0) {
+          await saveStartupStatus({
+            state: "skipped",
+            message: "Startup auto-unload stopped because " + finalSnapshot.context.unknownWorkspaceCount +
+              " tab(s) have unknown workspace identity. No tabs were unloaded from this final snapshot."
+          });
+          return;
+        }
+        finalSnapshot.context.allTabs.forEach(function (tab) { addCandidate(run, tab); });
+        run.collecting = false;
+        const candidateIds = Array.from(run.candidates).sort(function (a, b) { return a - b; });
 
         const summary = await withOperationLock(async function () {
           const result = { state: "completed", unloaded: 0, skipped: 0, failed: 0, aborted: false, messages: [] };
