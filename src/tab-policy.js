@@ -49,9 +49,10 @@
     }
     if (Number.isInteger(input.startupDiscoverySeconds) &&
         Number.isInteger(input.startupLoadingWaitSeconds) &&
+        Number.isInteger(input.perTabTimeoutSeconds) &&
         Number.isInteger(input.overallDeadlineSeconds) &&
-        input.startupDiscoverySeconds + input.startupLoadingWaitSeconds > input.overallDeadlineSeconds) {
-      errors.push("Startup discovery plus loading wait must not exceed the overall deadline.");
+        input.startupDiscoverySeconds + input.startupLoadingWaitSeconds + input.perTabTimeoutSeconds > input.overallDeadlineSeconds) {
+      errors.push("Startup discovery, loading wait, and at least one per-tab attempt must fit within the overall deadline.");
     }
     if (Number.isInteger(input.perTabTimeoutSeconds) &&
         Number.isInteger(input.overallDeadlineSeconds) &&

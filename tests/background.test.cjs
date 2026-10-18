@@ -347,3 +347,32 @@ test('a timed-out discard becomes uncertain and blocks later attempts until the 
   assert.match(later.message, /previous discard request/i);
   assert.deepEqual(browser.calls.discard, [2]);
 });
+
+test('startup cancels if a focused workspace switch occurs while the initial workspace query is delayed', async () => {
+  const browser = mockBrowser([
+    tab({ id: 1, active: true }),
+    tab({ id: 2, status: 'loading', title: 'Startup workspace tab' }),
+    tab({ id: 3, workspaceId: 'B', windowId: 1, title: 'Other workspace tab' })
+  ], {
+    autoUnloadOnStartup: true,
+    skipLoadingTabs: true
+  });
+  const originalQuery = browser.api.tabs.query.bind(browser.api.tabs);
+  browser.api.tabs.query = async (queryInfo = {}) => {
+    if (queryInfo.active && queryInfo.lastFocusedWindow) {
+      await new Promise((resolve) => setTimeout(resolve, 75));
+    }
+    return originalQuery(queryInfo);
+  };
+
+  const controller = createController(browser.api, policy, { discoveryMs: 5, loadingWaitMs: 20 });
+  controller.install();
+  const run = controller.runStartupAutoUnload();
+  setTimeout(() => browser.activate(3), 10);
+  setTimeout(() => browser.activate(1), 25);
+  await run;
+
+  assert.deepEqual(browser.calls.discard, []);
+  assert.equal(browser.store.startupStatus.state, 'cancelled');
+  assert.match(browser.store.startupStatus.message, /workspace/i);
+});

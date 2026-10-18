@@ -191,7 +191,8 @@ test('validates numeric settings and enforces the overall deadline relationship'
   const settings = { ...policy.DEFAULT_PREFERENCES };
   assert.deepEqual(policy.validatePreferences(settings), []);
   assert.ok(policy.validatePreferences({ ...settings, startupDiscoverySeconds: -1 }).some((message) => /startupDiscoverySeconds/.test(message)));
-  assert.ok(policy.validatePreferences({ ...settings, startupDiscoverySeconds: 30, startupLoadingWaitSeconds: 120, overallDeadlineSeconds: 60 }).some((message) => /must not exceed the overall deadline/.test(message)));
+  assert.ok(policy.validatePreferences({ ...settings, startupDiscoverySeconds: 30, startupLoadingWaitSeconds: 120, overallDeadlineSeconds: 60 }).some((message) => /must fit within the overall deadline/.test(message)));
+  assert.ok(policy.validatePreferences({ ...settings, startupDiscoverySeconds: 8, startupLoadingWaitSeconds: 0, perTabTimeoutSeconds: 5, overallDeadlineSeconds: 10 }).some((message) => /at least one per-tab attempt/.test(message)));
   assert.equal(policy.normalizePreferences({ startupDiscoverySeconds: 30, startupLoadingWaitSeconds: 120, overallDeadlineSeconds: 60 }).startupDiscoverySeconds, policy.DEFAULT_PREFERENCES.startupDiscoverySeconds);
 });
 
