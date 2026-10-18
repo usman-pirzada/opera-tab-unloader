@@ -171,9 +171,12 @@ test('background coordinator checks the active workspace before every discard at
   assert.match(backgroundSource, /await api\.tabs\.discard\(tabId\)/);
 });
 
-test('background startup run is cancelled when a different workspace becomes active', () => {
-  assert.match(backgroundSource, /cancelStartupRun\(run, activeWorkspaceId === null/);
+test('background startup run cancels on a change in the last-focused current workspace', () => {
+  assert.match(backgroundSource, /currentWorkspaceId = \\(await getActiveContext\\(\\)\\)\\.currentWorkspaceId/);
+  assert.match(backgroundSource, /if \\(currentWorkspaceId === null\\)/);
+  assert.match(backgroundSource, /if \\(!sameWorkspace\\(currentWorkspaceId, run\\.workspaceId\\)\\)/);
   assert.match(backgroundSource, /Workspace changed during startup auto-unload/);
-  assert.match(backgroundSource, /if \(run\.cancelled\)/);
+  assert.match(backgroundSource, /if \\(run\\.cancelled\\)/);
   assert.match(backgroundSource, /loadingWaitMs/);
+  assert.doesNotMatch(backgroundSource, /tab\\.active === true && !sameWorkspace\\(tab\\.workspaceId, run\\.workspaceId\\)/);
 });
