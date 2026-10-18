@@ -213,7 +213,8 @@ test('dedicated settings page validates values, confirms risky changes, and rest
   assert.match(optionsSource, /queueSave\(550\)/);
   assert.doesNotMatch(optionsSource, /window\.confirm/);
   assert.match(optionsSource, /policy\.DEFAULT_PREFERENCES/);
-  assert.match(optionsSource, /tabSortMode: "eligible-first"/);
+  assert.match(optionsSource, /savedSortMode = "eligible-first"/);
+  assert.match(optionsSource, /fillControls\(savedPreferences, savedSortMode\)/);
   assert.match(optionsHtml, /Maximum time for one tab attempt/);
   assert.match(optionsHtml, /When a loading tab has no pending URL/);
   assert.match(optionsHtml, /Reset to defaults/);

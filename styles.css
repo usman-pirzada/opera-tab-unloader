@@ -140,3 +140,28 @@ p { line-height: 1.45; }
 .empty-state { padding: 16px 12px; border: 1px dashed var(--border); border-radius: 9px; color: var(--muted); font-size: 12px; line-height: 1.45; text-align: center; }
 #workspace-scope-note.read-only-note { color: var(--accent); font-weight: 800; }
 [hidden] { display: none !important; }
+
+
+/* Compact toolbar controls with explicit busy feedback, modelled on browser settings UIs. */
+.header { align-items: center; }
+.header-copy { min-width: 0; }
+.header-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 7px; }
+.toolbar-icon-button {
+  display: inline-grid; place-items: center; width: 35px; height: 35px; padding: 0;
+  border: 1px solid var(--border); border-radius: 9px; background: var(--surface);
+  color: CanvasText; font-size: 21px; font-weight: 600; line-height: 1;
+  transition: background-color .14s ease, border-color .14s ease, transform .14s ease;
+}
+.toolbar-icon-button:hover:not(:disabled) { background: var(--surface-strong); border-color: color-mix(in srgb, CanvasText 28%, var(--border)); }
+.toolbar-icon-button:active:not(:disabled) { transform: translateY(1px); }
+.toolbar-icon-button:disabled { opacity: .66; }
+.refresh-icon { display: inline-block; font-size: 25px; transform-origin: 50% 50%; }
+body.is-refreshing, body.is-refreshing * { cursor: progress !important; }
+body.is-refreshing .refresh-icon { animation: popup-refresh-rotate .7s linear infinite; }
+body.is-refreshing #refresh-button { border-color: color-mix(in srgb, #4388df 65%, var(--border)); background: color-mix(in srgb, #4388df 10%, Canvas 90%); }
+@keyframes popup-refresh-rotate { to { transform: rotate(360deg); } }
+@media (max-width: 350px) {
+  .header-actions { gap: 4px; }
+  .toolbar-icon-button { width: 32px; height: 32px; }
+  .header { gap: 8px; }
+}

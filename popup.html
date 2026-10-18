@@ -9,17 +9,24 @@
 <body>
   <main class="app">
     <header class="header">
-      <div>
+      <div class="header-copy">
         <p class="eyebrow">OPERA GX</p>
         <h1>Workspace Tab Unloader</h1>
         <p id="workspace-label" class="muted">Detecting workspaces…</p>
+      </div>
+      <div class="header-actions" aria-label="Popup actions">
+        <button id="refresh-button" class="toolbar-icon-button" type="button" title="Refresh tab counts and eligibility" aria-label="Refresh tab counts and eligibility">
+          <span class="refresh-icon" aria-hidden="true">↻</span>
+        </button>
+        <button id="open-settings-button" class="toolbar-icon-button" type="button" title="Open full Settings" aria-label="Open full Settings">
+          <span aria-hidden="true">⚙</span>
+        </button>
       </div>
     </header>
 
     <section class="panel workspace-panel" aria-labelledby="workspace-title">
       <div class="workspace-title-row">
         <label id="workspace-title" class="field-label" for="workspace-select">Workspace to manage</label>
-        <button id="refresh-button" class="retry-button" type="button" title="Refresh tab counts and eligibility">Refresh</button>
       </div>
       <select id="workspace-select" class="select-control" aria-label="Workspace to manage">
         <option>Loading workspaces…</option>
@@ -36,8 +43,7 @@
         <span class="summary-chevron" aria-hidden="true">⌄</span>
       </summary>
       <div class="settings-content">
-        <p class="field-note">Detailed protections, startup behavior, safety warnings, keyboard shortcuts, and timing limits are configured on the full Settings page.</p>
-        <button id="open-settings-button" class="secondary-button" type="button">Open full settings</button>
+        <p class="field-note">Detailed protections, startup behavior, safety warnings, keyboard shortcuts, and timing limits are configured on the full Settings page. Use the gear above to open them.</p>
       </div>
     </details>
 

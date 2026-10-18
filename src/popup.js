@@ -35,6 +35,7 @@
   let pendingBulk = null;
   let busy = false;
   let reviewingBulk = false;
+  let manualRefreshing = false;
   let refreshSequence = 0;
   let refreshTimer = null;
   let refreshQueued = false;
@@ -74,7 +75,7 @@
     ui.tabSortSelect.disabled = controlsBusy || !snapshot;
     ui.confirmBulk.disabled = controlsBusy;
     ui.retry.disabled = controlsBusy;
-    ui.refresh.disabled = controlsBusy;
+    ui.refresh.disabled = controlsBusy || manualRefreshing;
     ui.retry.hidden = Boolean(workspaceData);
     const canUnloadSelectedWorkspace = snapshot &&
       policy.isSameWorkspace(snapshot.workspace.id, snapshot.currentWorkspaceId);
@@ -602,7 +603,21 @@
     });
   });
   ui.retry.addEventListener("click", () => refresh());
-  ui.refresh.addEventListener("click", () => refresh());
+  ui.refresh.addEventListener("click", async () => {
+    if (manualRefreshing || busy || reviewingBulk) return;
+    manualRefreshing = true;
+    document.body.classList.add("is-refreshing");
+    ui.refresh.setAttribute("aria-busy", "true");
+    updateControls();
+    try {
+      await refresh();
+    } finally {
+      manualRefreshing = false;
+      document.body.classList.remove("is-refreshing");
+      ui.refresh.removeAttribute("aria-busy");
+      updateControls();
+    }
+  });
   ui.unloadAll.addEventListener("click", beginBulkReview);
   ui.cancelBulk.addEventListener("click", () => {
     clearBulkConfirmation();
