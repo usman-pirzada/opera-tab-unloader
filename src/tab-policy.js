@@ -4,7 +4,9 @@
   const DEFAULT_PREFERENCES = Object.freeze({
     skipPinnedTabs: true,
     skipAudibleTabs: true,
-    skipNonAutoDiscardableTabs: true
+    skipNonAutoDiscardableTabs: true,
+    skipLoadingTabs: true,
+    autoUnloadOnStartup: false
   });
 
   function normalizeWorkspaceId(value) {
@@ -35,10 +37,12 @@
     if (tab.discarded === true) reasons.push("The tab is already discarded.");
     else if (tab.discarded !== false) reasons.push("The browser did not report the tab's discard state.");
 
-    if (tab.status !== "complete") {
-      reasons.push(tab.status === "loading"
-        ? "The tab is still loading."
-        : "The browser did not confirm that the page has finished loading.");
+    if (tab.status === "loading") {
+      if (prefs.skipLoadingTabs !== false) {
+        reasons.push("The tab is still loading. Turn off the loading-tab protection to allow unload attempts.");
+      }
+    } else if (tab.status !== "complete") {
+      reasons.push("The browser did not confirm that the page has finished loading.");
     }
 
     if (prefs.skipPinnedTabs) {
@@ -59,13 +63,20 @@
     if (tab.incognito === true) reasons.push("Private-window tabs are protected.");
     else if (tab.incognito !== false) reasons.push("The browser did not confirm whether this tab is in a private window.");
 
-    if (typeof tab.url !== "string" || tab.url.length === 0) {
-      reasons.push("The browser did not provide a URL to classify safely.");
+    const usePendingUrl = tab.status === "loading" && prefs.skipLoadingTabs === false &&
+      typeof tab.pendingUrl === "string" && tab.pendingUrl.length > 0;
+    const candidateUrl = usePendingUrl ? tab.pendingUrl : tab.url;
+    if (typeof candidateUrl !== "string" || candidateUrl.length === 0) {
+      reasons.push(usePendingUrl
+        ? "The browser did not provide a navigation URL to classify safely."
+        : "The browser did not provide a URL to classify safely.");
     } else {
       try {
-        const parsedUrl = new URL(tab.url);
+        const parsedUrl = new URL(candidateUrl);
         if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
-          reasons.push("Only ordinary HTTP and HTTPS pages can be discarded by this extension.");
+          reasons.push(usePendingUrl
+            ? "The pending navigation is not an ordinary HTTP or HTTPS page."
+            : "Only ordinary HTTP and HTTPS pages can be discarded by this extension.");
         }
         if (parsedUrl.username || parsedUrl.password) {
           reasons.push("URLs containing embedded credentials are protected.");

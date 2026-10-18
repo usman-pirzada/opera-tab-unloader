@@ -4,6 +4,7 @@ const policy = require('../src/tab-policy.js');
 const fs = require('node:fs');
 const path = require('node:path');
 const popupSource = fs.readFileSync(path.join(__dirname, '../src/popup.js'), 'utf8');
+const backgroundSource = fs.readFileSync(path.join(__dirname, '../src/background.js'), 'utf8');
 
 function safeTab(overrides = {}) {
   return {
@@ -51,9 +52,11 @@ test('skips active tabs', () => {
   assert.match(policy.evaluateTab(safeTab({ active: true }), '3', {}).reasons.join(' '), /active/i);
 });
 
-test('skips loading and unknown-status tabs', () => {
+test('protects loading tabs by default but allows an explicit loading-tab opt-out', () => {
   assert.match(policy.evaluateTab(safeTab({ status: 'loading' }), '3', {}).reasons.join(' '), /loading/i);
-  assert.match(policy.evaluateTab(safeTab({ status: undefined }), '3', {}).reasons.join(' '), /finished loading/i);
+  assert.equal(policy.evaluateTab(safeTab({ status: 'loading' }), '3', { skipLoadingTabs: false }).eligible, true);
+  assert.equal(policy.evaluateTab(safeTab({ status: 'loading', pendingUrl: 'opera://settings' }), '3', { skipLoadingTabs: false }).eligible, false);
+  assert.match(policy.evaluateTab(safeTab({ status: undefined }), '3', { skipLoadingTabs: false }).reasons.join(' '), /finished loading/i);
 });
 
 test('skips tabs already discarded', () => {
@@ -150,20 +153,26 @@ test('non-current workspace rows remain disabled through control refreshes', () 
   assert.match(popupSource, /Read-only: switch workspace to unload/);
 });
 
-test('individual and bulk discard paths require the target workspace to be current', () => {
-  const individualGuard = popupSource.indexOf(
-    'if (!policy.isSameWorkspace(expectedWorkspaceId, data.currentWorkspaceId))'
-  );
-  const discardCall = popupSource.indexOf('await chrome.tabs.discard(tabId)');
-  assert.ok(individualGuard >= 0, 'individual preflight checks the active workspace');
-  assert.ok(discardCall > individualGuard, 'workspace guard appears before tabs.discard');
-
-  const bulkReviewGuard = popupSource.indexOf(
-    'if (!policy.isSameWorkspace(latest.workspace.id, latest.currentWorkspaceId))'
-  );
-  const bulkQueue = popupSource.indexOf('pendingBulk = {');
-  assert.ok(bulkReviewGuard >= 0 && bulkReviewGuard < bulkQueue,
-    'bulk review blocks read-only workspaces before queuing candidates');
-
+test('popup delegates discards to the background coordinator and listens for live tab changes', () => {
+  assert.doesNotMatch(popupSource, /await chrome\.tabs\.discard\(/);
+  assert.match(popupSource, /requestBackground\("UNLOAD_ONE"/);
+  assert.match(popupSource, /requestBackground\("UNLOAD_BATCH"/);
+  assert.match(popupSource, /refreshSequence/);
+  assert.match(popupSource, /\["onUpdated", "onCreated", "onRemoved", "onActivated", "onReplaced"\]/);
+  assert.match(popupSource, /refreshTimer/);
   assert.doesNotMatch(popupSource, /recordDiagnostic|diagnosticEvents|DIAGNOSTIC_KEY|export-diagnostics-button/);
+});
+
+test('background coordinator checks the active workspace before every discard attempt', () => {
+  assert.match(backgroundSource, /async function inspectAndDiscard/);
+  assert.match(backgroundSource, /latestWorkspaceId = \(await getActiveContext\(\)\)\.currentWorkspaceId/);
+  assert.match(backgroundSource, /if \(!sameWorkspace\(targetWorkspaceId, latestWorkspaceId\)\)/);
+  assert.match(backgroundSource, /await api\.tabs\.discard\(tabId\)/);
+});
+
+test('background startup run is cancelled when a different workspace becomes active', () => {
+  assert.match(backgroundSource, /cancelStartupRun\(run, activeWorkspaceId === null/);
+  assert.match(backgroundSource, /Workspace changed during startup auto-unload/);
+  assert.match(backgroundSource, /if \(run\.cancelled\)/);
+  assert.match(backgroundSource, /loadingWaitMs/);
 });
