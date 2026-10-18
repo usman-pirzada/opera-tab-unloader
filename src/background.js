@@ -1037,8 +1037,15 @@
 
         const summary = await withOperationLock(async function () {
           return runAdaptiveScan(run, preferences, {
-            scanWindowMs: allPreferences.startupDiscoverySeconds * 1000,
-            loadingGraceMs: allPreferences.startupLoadingWaitSeconds * 1000
+            // Keep production values settings-driven; the injectable millisecond
+            // overrides let deterministic unit tests exercise lifecycle cases
+            // without waiting real startup windows.
+            scanWindowMs: options && Number.isFinite(options.discoveryMs)
+              ? options.discoveryMs
+              : allPreferences.startupDiscoverySeconds * 1000,
+            loadingGraceMs: options && Number.isFinite(options.loadingWaitMs)
+              ? options.loadingWaitMs
+              : allPreferences.startupLoadingWaitSeconds * 1000
           });
         }, { indicator: true });
 
