@@ -172,12 +172,12 @@ test('background coordinator checks the active workspace before every discard at
 });
 
 test('background startup cancellation is based on focused-window workspace events', () => {
-  assert.match(backgroundSource, /const \\[eventTabResult, focusedContextResult\\] = await Promise\\.allSettled/);
-  assert.match(backgroundSource, /activationIsInFocusedWindow && !sameWorkspace\\(eventWorkspaceId, run\\.workspaceId\\)/);
-  assert.match(backgroundSource, /if \\(currentWorkspaceId === null\\)/);
-  assert.match(backgroundSource, /if \\(!sameWorkspace\\(currentWorkspaceId, run\\.workspaceId\\)\\)/);
+  assert.ok(backgroundSource.includes('const [eventTabResult, focusedContextResult] = await Promise.allSettled(['));
+  assert.ok(backgroundSource.includes('activationIsInFocusedWindow && !sameWorkspace(eventWorkspaceId, run.workspaceId)'));
+  assert.ok(backgroundSource.includes('if (currentWorkspaceId === null)'));
+  assert.ok(backgroundSource.includes('if (!sameWorkspace(currentWorkspaceId, run.workspaceId))'));
   assert.match(backgroundSource, /Workspace changed during startup auto-unload/);
-  assert.match(backgroundSource, /if \\(run\\.cancelled\\)/);
+  assert.match(backgroundSource, /if \(run\.cancelled\)/);
   assert.match(backgroundSource, /loadingWaitMs/);
-  assert.doesNotMatch(backgroundSource, /tab\\.active === true && !sameWorkspace\\(tab\\.workspaceId, run\\.workspaceId\\)/);
-});
+  assert.doesNotMatch(backgroundSource, /tab\.active === true && !sameWorkspace\(tab\.workspaceId, run\.workspaceId\)/);
+});;
