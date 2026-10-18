@@ -516,3 +516,40 @@ test('startup reports workspace lookup failures without crashing its catch path'
   assert.match(browser.store.startupStatus.message, /simulated startup query failure/);
   assert.deepEqual(browser.calls.discard, []);
 });
+
+test('individual unload timeout does not change the toolbar bulk-operation status', async () => {
+  const prefs = {
+    ...policy.DEFAULT_PREFERENCES,
+    perTabTimeoutSeconds: 2,
+    overallDeadlineSeconds: 30,
+    startupDiscoverySeconds: 10,
+    startupLoadingWaitSeconds: 0,
+    startupQuietPeriodSeconds: 1,
+    adaptiveBulkScanSeconds: 5
+  };
+  const browser = mockBrowser(
+    [tab({ id: 1, active: true }), tab({ id: 2, title: 'Individual target' })],
+    prefs,
+    async (id, tabs) => new Promise((resolve) => {
+      setTimeout(() => {
+        const value = tabs.get(id);
+        if (value) value.discarded = true;
+        resolve(value ? { ...value } : undefined);
+      }, 2200);
+    })
+  );
+  const previousStatus = { state: 'idle', message: 'Ready.', time: 'unchanged' };
+  browser.store.operationStatus = { ...previousStatus };
+  const controller = createController(browser.api, policy);
+  const result = await controller.handleMessage({
+    type: 'UNLOAD_ONE',
+    tabId: 2,
+    workspaceId: 'A',
+    preferences: prefs
+  });
+
+  assert.equal(result.state, 'uncertain');
+  assert.deepEqual(browser.store.operationStatus, previousStatus);
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  assert.deepEqual(browser.store.operationStatus, previousStatus);
+});

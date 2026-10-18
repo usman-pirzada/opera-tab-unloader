@@ -1,6 +1,6 @@
 {
   "name": "opera-gx-workspace-tab-unloader",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "private": true,
   "description": "A local-only Manifest V3 extension for previewing workspaces and safely unloading eligible tabs.",
   "scripts": {
