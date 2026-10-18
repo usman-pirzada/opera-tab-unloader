@@ -378,12 +378,23 @@
         }
         return;
       }
-      const hadPendingReview = Boolean(pendingBulk);
-      if (hadPendingReview) {
+      const reviewBeforeRefresh = pendingBulk;
+      if (reviewBeforeRefresh && reviewBeforeRefresh.mode !== "adaptive") {
         clearBulkConfirmation();
-        setStatus("Tab state changed. The bulk review was cancelled; review the refreshed list again.");
+        setStatus("Tab state changed. The exact-list review was cancelled; review the refreshed list again.");
       }
-      refresh({ clearPending: false, quiet: true }).catch(function () {});
+      refresh({ clearPending: false, quiet: true }).then(function () {
+        if (!reviewBeforeRefresh || reviewBeforeRefresh.mode !== "adaptive" ||
+            pendingBulk !== reviewBeforeRefresh || !snapshot) return;
+        const stillTargetsCapturedWorkspace =
+          sameId(selectedWorkspaceId, reviewBeforeRefresh.workspaceId) &&
+          sameId(snapshot.workspace.id, reviewBeforeRefresh.workspaceId) &&
+          sameId(snapshot.currentWorkspaceId, reviewBeforeRefresh.workspaceId);
+        if (!stillTargetsCapturedWorkspace) {
+          clearBulkConfirmation();
+          setStatus("The active or selected workspace changed. The adaptive operation was cancelled; choose the intended current workspace and try again.");
+        }
+      }).catch(function () {});
     }, 250);
   }
 

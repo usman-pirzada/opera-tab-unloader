@@ -342,14 +342,6 @@
       if (run.phase === "monitoring" || run.phase === "waiting-load") wakeRun(run);
     }
 
-    async function waitForDurationInChunks(run, milliseconds) {
-      const deadline = Date.now() + Math.max(0, milliseconds);
-      while (!run.cancelled && Date.now() < deadline) {
-        await waitForSignal(run, Math.min(20000, deadline - Date.now()));
-      }
-      return !run.cancelled;
-    }
-
     function addCandidate(run, tab) {
       if (!run || run.cancelled || !run.collecting || !tab || !Number.isInteger(tab.id)) return;
       if (sameWorkspace(tab.workspaceId, run.workspaceId)) run.candidates.add(tab.id);
@@ -901,71 +893,6 @@
           (summary.messages.length ? " " + summary.messages.join(" ") : "");
         return summary;
       }, { indicator: true });
-    }
-
-    async function startupContextStillCurrent(run) {
-      const context = await getWorkspaceContext(run.deadlineAt);
-      if (run.cancelled) return { ok: false, context: context };
-      if (!sameWorkspace(run.workspaceId, context.currentWorkspaceId)) {
-        cancelStartupRun(run, "Workspace changed during startup auto-unload. Tabs in the old workspace will not be attempted further.");
-        return { ok: false, context: context };
-      }
-      return { ok: true, context: context };
-    }
-
-    async function waitForLoadingCandidates(run, timeoutMs, preferences, waitForLoads) {
-      if (timeoutMs <= 0) return true;
-      const deadline = Math.min(
-        Date.now() + timeoutMs,
-        Number.isFinite(run.deadlineAt) ? run.deadlineAt : Number.POSITIVE_INFINITY
-      );
-      const quietPeriodMs = preferences.startupQuietPeriodSeconds * 1000;
-      const readinessPreferences = { ...preferences, skipLoadingTabs: false };
-      run.phase = "waiting-load";
-      while (!run.cancelled && Date.now() < deadline) {
-        const generation = run.updateGeneration;
-        const candidateIds = Array.from(run.candidates);
-        let loadingFound = false;
-        if (waitForLoads) {
-          for (const tabId of candidateIds) {
-            if (run.cancelled) return false;
-            try {
-              const tab = await awaitWithinDeadline(
-                api.tabs.get(tabId),
-                Math.min(Date.now() + preferences.perTabTimeoutSeconds * 1000, deadline),
-                "checking a loading tab"
-              );
-              const couldBecomeEligible = tabPolicy.evaluateTab(
-                tab, run.workspaceId, readinessPreferences
-              ).eligible;
-              if (sameWorkspace(tab.workspaceId, run.workspaceId) &&
-                  tab.status === "loading" && couldBecomeEligible) {
-                loadingFound = true;
-                break;
-              }
-            } catch (error) {
-              if (error && error.operationTimedOut) return false;
-              // A tab closed during restoration is no longer a candidate.
-            }
-          }
-        }
-        if (generation !== run.updateGeneration) continue;
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) break;
-        const quietElapsed = Date.now() - (run.lastActivityAt || run.startedAt || Date.now());
-        if (!loadingFound && quietElapsed >= quietPeriodMs) return true;
-
-        // Even if no currently-known tab is loading, keep collecting briefly
-        // after the most recent relevant tab event. This catches tabs restored
-        // a little later than the first query without polling the browser.
-        const waitMs = loadingFound
-          ? remaining
-          : Math.min(remaining, Math.max(1, quietPeriodMs - quietElapsed));
-        // Wake periodically during long waits so the worker does not depend on one
-        // timer-only sleep to resume the startup workflow.
-        await waitForSignal(run, Math.min(waitMs, 20000), generation);
-      }
-      return false;
     }
 
     async function runStartupAutoUnload() {
