@@ -146,11 +146,12 @@ test('same-workspace comparison normalizes IDs and fails closed on missing ident
   assert.equal(policy.isSameWorkspace('3', null), false);
 });
 
-test('non-current workspace rows remain disabled through control refreshes', () => {
+test('non-current workspace rows remain disabled during busy operations and pending review', () => {
   assert.match(popupSource, /button\.dataset\.requiresCurrentWorkspace = String\(!workspaceIsCurrent\)/);
-  assert.match(popupSource, /button\.disabled = busy \|\| button\.dataset\.requiresCurrentWorkspace === "true"/);
+  assert.match(popupSource, /button\.disabled = controlsBusy \|\| Boolean\(pendingBulk\) \|\| button\.dataset\.requiresCurrentWorkspace === "true"/);
   assert.match(popupSource, /Read-only preview\. Switch to this workspace in Opera GX before unloading tabs\./);
   assert.match(popupSource, /Read-only: switch workspace to unload/);
+  assert.match(popupSource, /reviewingBulk = true/);
 });
 
 test('popup delegates discards to the background coordinator and listens for live tab changes', () => {
