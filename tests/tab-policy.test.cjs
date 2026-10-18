@@ -243,3 +243,50 @@ test('popup refresh button provides visible rotating busy feedback', () => {
   assert.match(popupSource, /ui\.refresh\.setAttribute\("aria-busy", "true"\)/);
   assert.match(popupSource, /body\.classList\.remove\("is-refreshing"\)/);
 });
+
+test('defaults to adaptive bulk unloading with confirmation and independent protection profiles', () => {
+  const defaults = policy.DEFAULT_PREFERENCES;
+  assert.equal(defaults.bulkUnloadMode, 'adaptive');
+  assert.equal(defaults.confirmBulkUnload, true);
+  assert.equal(defaults.skipLoadingTabs, true);
+  assert.equal(defaults.startupSkipLoadingTabs, true);
+  assert.equal(defaults.adaptiveBulkScanSeconds, 45);
+});
+
+test('migrates legacy shared protection values to the startup profile on upgrade', () => {
+  const normalized = policy.normalizePreferences({
+    skipPinnedTabs: false,
+    skipAudibleTabs: true,
+    skipNonAutoDiscardableTabs: true,
+    skipLoadingTabs: false,
+    loadingUrlFallback: 'lastCommitted'
+  });
+  assert.equal(normalized.skipPinnedTabs, false);
+  assert.equal(normalized.startupSkipPinnedTabs, false);
+  assert.equal(normalized.skipLoadingTabs, false);
+  assert.equal(normalized.startupSkipLoadingTabs, false);
+  assert.equal(normalized.startupLoadingUrlFallback, 'lastCommitted');
+});
+
+test('keeps manually configured and startup protection profiles independent after migration', () => {
+  const normalized = policy.normalizePreferences({
+    skipLoadingTabs: false,
+    startupSkipPinnedTabs: true,
+    startupSkipAudibleTabs: true,
+    startupSkipNonAutoDiscardableTabs: true,
+    startupSkipLoadingTabs: true,
+    startupLoadingUrlFallback: 'skip'
+  });
+  const manual = policy.getPolicyPreferences(normalized, 'manual');
+  const startup = policy.getPolicyPreferences(normalized, 'startup');
+  assert.equal(manual.skipLoadingTabs, false);
+  assert.equal(startup.skipLoadingTabs, true);
+});
+
+test('validates adaptive scan windows and exact-review mode values', () => {
+  const defaults = { ...policy.DEFAULT_PREFERENCES };
+  assert.deepEqual(policy.validatePreferences(defaults), []);
+  assert.ok(policy.validatePreferences({ ...defaults, bulkUnloadMode: 'surprise' }).some((message) => /bulkUnloadMode/.test(message)));
+  assert.ok(policy.validatePreferences({ ...defaults, adaptiveBulkScanSeconds: 180, perTabTimeoutSeconds: 30, overallDeadlineSeconds: 180 }).some((message) => /adaptive bulk scan window/.test(message)));
+  assert.ok(policy.validatePreferences({ ...defaults, startupDiscoverySeconds: 240, startupLoadingWaitSeconds: 120, startupQuietPeriodSeconds: 10, perTabTimeoutSeconds: 30, overallDeadlineSeconds: 300 }).some((message) => /startup monitoring window/.test(message)));
+});

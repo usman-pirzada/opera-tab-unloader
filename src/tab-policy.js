@@ -2,16 +2,28 @@
   "use strict";
 
   const DEFAULT_PREFERENCES = Object.freeze({
+    // Legacy unprefixed keys are the manual-operation profile.
     skipPinnedTabs: true,
     skipAudibleTabs: true,
     skipNonAutoDiscardableTabs: true,
     skipLoadingTabs: true,
     loadingUrlFallback: "skip",
+
+    // Startup has an independent protection profile.
+    startupSkipPinnedTabs: true,
+    startupSkipAudibleTabs: true,
+    startupSkipNonAutoDiscardableTabs: true,
+    startupSkipLoadingTabs: true,
+    startupLoadingUrlFallback: "skip",
+
     autoUnloadOnStartup: false,
-    startupDiscoverySeconds: 8,
+    bulkUnloadMode: "adaptive",
+    confirmBulkUnload: true,
+    adaptiveBulkScanSeconds: 45,
+    startupDiscoverySeconds: 90,
     startupLoadingWaitSeconds: 20,
     startupQuietPeriodSeconds: 2,
-    overallDeadlineSeconds: 60,
+    overallDeadlineSeconds: 180,
     perTabTimeoutSeconds: 5,
     showStatusIndicator: true
   });
@@ -21,17 +33,31 @@
     "skipAudibleTabs",
     "skipNonAutoDiscardableTabs",
     "skipLoadingTabs",
+    "startupSkipPinnedTabs",
+    "startupSkipAudibleTabs",
+    "startupSkipNonAutoDiscardableTabs",
+    "startupSkipLoadingTabs",
     "autoUnloadOnStartup",
+    "confirmBulkUnload",
     "showStatusIndicator"
   ]);
 
   const INTEGER_PREFERENCE_RANGES = Object.freeze({
-    startupDiscoverySeconds: Object.freeze({ min: 2, max: 30 }),
+    adaptiveBulkScanSeconds: Object.freeze({ min: 5, max: 180 }),
+    startupDiscoverySeconds: Object.freeze({ min: 10, max: 240 }),
     startupLoadingWaitSeconds: Object.freeze({ min: 0, max: 120 }),
     startupQuietPeriodSeconds: Object.freeze({ min: 1, max: 10 }),
-    overallDeadlineSeconds: Object.freeze({ min: 10, max: 300 }),
+    overallDeadlineSeconds: Object.freeze({ min: 30, max: 300 }),
     perTabTimeoutSeconds: Object.freeze({ min: 2, max: 30 })
   });
+
+  const STARTUP_PROFILE_KEYS = Object.freeze([
+    "startupSkipPinnedTabs",
+    "startupSkipAudibleTabs",
+    "startupSkipNonAutoDiscardableTabs",
+    "startupSkipLoadingTabs",
+    "startupLoadingUrlFallback"
+  ]);
 
   function validatePreferences(value) {
     const input = value && typeof value === "object" ? value : {};
@@ -49,14 +75,26 @@
     if (input.loadingUrlFallback !== "skip" && input.loadingUrlFallback !== "lastCommitted") {
       errors.push("loadingUrlFallback must be skip or lastCommitted.");
     }
+    if (input.startupLoadingUrlFallback !== "skip" && input.startupLoadingUrlFallback !== "lastCommitted") {
+      errors.push("startupLoadingUrlFallback must be skip or lastCommitted.");
+    }
+    if (input.bulkUnloadMode !== "adaptive" && input.bulkUnloadMode !== "exact-review") {
+      errors.push("bulkUnloadMode must be adaptive or exact-review.");
+    }
     if (Number.isInteger(input.startupDiscoverySeconds) &&
         Number.isInteger(input.startupLoadingWaitSeconds) &&
         Number.isInteger(input.startupQuietPeriodSeconds) &&
         Number.isInteger(input.perTabTimeoutSeconds) &&
         Number.isInteger(input.overallDeadlineSeconds) &&
-        input.startupDiscoverySeconds + input.startupLoadingWaitSeconds + input.startupQuietPeriodSeconds +
-          input.perTabTimeoutSeconds > input.overallDeadlineSeconds) {
-      errors.push("Startup discovery, loading wait, quiet period, and at least one per-tab attempt must fit within the overall deadline.");
+        input.startupDiscoverySeconds + input.startupLoadingWaitSeconds +
+          input.startupQuietPeriodSeconds + input.perTabTimeoutSeconds > input.overallDeadlineSeconds) {
+      errors.push("The startup monitoring window, loading grace period, quiet interval, and one tab attempt must fit within the overall deadline.");
+    }
+    if (Number.isInteger(input.adaptiveBulkScanSeconds) &&
+        Number.isInteger(input.perTabTimeoutSeconds) &&
+        Number.isInteger(input.overallDeadlineSeconds) &&
+        input.adaptiveBulkScanSeconds + input.perTabTimeoutSeconds > input.overallDeadlineSeconds) {
+      errors.push("The adaptive bulk scan window plus one tab attempt must fit within the overall deadline.");
     }
     if (Number.isInteger(input.perTabTimeoutSeconds) &&
         Number.isInteger(input.overallDeadlineSeconds) &&
@@ -82,7 +120,36 @@
     if (input.loadingUrlFallback === "skip" || input.loadingUrlFallback === "lastCommitted") {
       result.loadingUrlFallback = input.loadingUrlFallback;
     }
+    if (input.startupLoadingUrlFallback === "skip" || input.startupLoadingUrlFallback === "lastCommitted") {
+      result.startupLoadingUrlFallback = input.startupLoadingUrlFallback;
+    }
+    if (input.bulkUnloadMode === "adaptive" || input.bulkUnloadMode === "exact-review") {
+      result.bulkUnloadMode = input.bulkUnloadMode;
+    }
+
+    // Existing installations only have the old shared protection keys. On their
+    // first upgrade, copy those values into the startup profile as well so the
+    // change does not silently alter an existing user's startup policy. Once any
+    // startup-specific key has been persisted, the profiles are independent.
+    const hasStoredStartupProfile = STARTUP_PROFILE_KEYS.some(function (key) {
+      return Object.prototype.hasOwnProperty.call(input, key);
+    });
+    if (!hasStoredStartupProfile) {
+      result.startupSkipPinnedTabs = typeof input.skipPinnedTabs === "boolean"
+        ? input.skipPinnedTabs : DEFAULT_PREFERENCES.startupSkipPinnedTabs;
+      result.startupSkipAudibleTabs = typeof input.skipAudibleTabs === "boolean"
+        ? input.skipAudibleTabs : DEFAULT_PREFERENCES.startupSkipAudibleTabs;
+      result.startupSkipNonAutoDiscardableTabs = typeof input.skipNonAutoDiscardableTabs === "boolean"
+        ? input.skipNonAutoDiscardableTabs : DEFAULT_PREFERENCES.startupSkipNonAutoDiscardableTabs;
+      result.startupSkipLoadingTabs = typeof input.skipLoadingTabs === "boolean"
+        ? input.skipLoadingTabs : DEFAULT_PREFERENCES.startupSkipLoadingTabs;
+      result.startupLoadingUrlFallback =
+        input.loadingUrlFallback === "skip" || input.loadingUrlFallback === "lastCommitted"
+          ? input.loadingUrlFallback : DEFAULT_PREFERENCES.startupLoadingUrlFallback;
+    }
+
     if (validatePreferences(result).length > 0) {
+      result.adaptiveBulkScanSeconds = DEFAULT_PREFERENCES.adaptiveBulkScanSeconds;
       result.startupDiscoverySeconds = DEFAULT_PREFERENCES.startupDiscoverySeconds;
       result.startupLoadingWaitSeconds = DEFAULT_PREFERENCES.startupLoadingWaitSeconds;
       result.startupQuietPeriodSeconds = DEFAULT_PREFERENCES.startupQuietPeriodSeconds;
@@ -90,6 +157,19 @@
       result.perTabTimeoutSeconds = DEFAULT_PREFERENCES.perTabTimeoutSeconds;
     }
     return result;
+  }
+
+  function getPolicyPreferences(value, profile) {
+    const normalized = normalizePreferences(value);
+    if (profile !== "startup") return normalized;
+    return {
+      ...normalized,
+      skipPinnedTabs: normalized.startupSkipPinnedTabs,
+      skipAudibleTabs: normalized.startupSkipAudibleTabs,
+      skipNonAutoDiscardableTabs: normalized.startupSkipNonAutoDiscardableTabs,
+      skipLoadingTabs: normalized.startupSkipLoadingTabs,
+      loadingUrlFallback: normalized.startupLoadingUrlFallback
+    };
   }
 
   function normalizeWorkspaceId(value) {
@@ -218,6 +298,7 @@
     INTEGER_PREFERENCE_RANGES,
     validatePreferences,
     normalizePreferences,
+    getPolicyPreferences,
     normalizeWorkspaceId,
     getIneligibilityReasons,
     evaluateTab,
