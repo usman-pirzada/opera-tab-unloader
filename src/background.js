@@ -918,68 +918,62 @@
         loadPreferences(), initializationDeadline, "loading startup settings"
       );
 
-      let active;
+      let active = null;
+      let activeError = null;
       try {
-        // Establish the candidate workspace before waiting on storage; while the
-        // preferences read completes, activation events are checked against it.
+        // Capture the current workspace as early as possible. Once this baseline
+        // is known, changes are watched while Settings storage is still loading.
         active = await awaitWithinDeadline(
           getActiveContext(), initializationDeadline, "reading the initial workspace"
         );
       } catch (error) {
-        let settings = null;
-        try { settings = await preferencesPromise; } catch (_settingsError) {}
-        if (settings && !settings.preferences.autoUnloadOnStartup) {
+        activeError = error;
+      }
+
+      const probe = active && active.currentWorkspaceId !== null ? {
+        workspaceId: active.currentWorkspaceId,
+        cancelled: false,
+        cancelReason: ""
+      } : null;
+      if (probe) startupScopeProbe = probe;
+
+      try {
+        let loaded;
+        try {
+          loaded = await preferencesPromise;
+        } catch (error) {
+          await saveStartupStatus({
+            state: error && error.operationTimedOut ? "timeout" : "failed",
+            message: "Startup settings could not be read: " + errText(error)
+          });
+          return;
+        }
+
+        const allPreferences = loaded.preferences;
+        if (!allPreferences.autoUnloadOnStartup) {
           await saveStartupStatus({
             state: "disabled",
             message: "Startup auto-unload is off. No tabs were unloaded."
           }, { updateActionIcon: false });
-        } else {
-          await saveStartupStatus({
-            state: error && error.operationTimedOut ? "timeout" : "failed",
-            message: "Startup auto-unload could not establish the initial workspace: " + errText(error) + " No tabs were unloaded."
-          });
+          return;
         }
-        return;
-      }
 
-      let loaded;
-      try {
-        loaded = await preferencesPromise;
-      } catch (error) {
-        await saveStartupStatus({
-          state: error && error.operationTimedOut ? "timeout" : "failed",
-          message: "Startup settings could not be read: " + errText(error)
-        });
-        return;
-      }
+        if (activeError) {
+          await saveStartupStatus({
+            state: activeError && activeError.operationTimedOut ? "timeout" : "failed",
+            message: "Startup auto-unload could not establish the initial workspace: " + errText(activeError) + " No tabs were unloaded."
+          });
+          return;
+        }
+        if (!active || active.currentWorkspaceId === null || !probe) {
+          await saveStartupStatus({
+            state: "skipped",
+            message: "Startup auto-unload skipped because Opera GX has not exposed a verifiable current workspace yet. No tabs were unloaded."
+          }, { updateActionIcon: false });
+          return;
+        }
 
-      const allPreferences = loaded.preferences;
-      if (!allPreferences.autoUnloadOnStartup) {
-        await saveStartupStatus({
-          state: "disabled",
-          message: "Startup auto-unload is off. No tabs were unloaded."
-        }, { updateActionIcon: false });
-        return;
-      }
-
-      const deadlineAt = startupStartedAt + allPreferences.overallDeadlineSeconds * 1000;
-      if (active.currentWorkspaceId === null) {
-        await saveStartupStatus({
-          state: "skipped",
-          message: "Startup auto-unload skipped because Opera GX has not exposed a verifiable current workspace yet. No tabs were unloaded."
-        });
-        return;
-      }
-
-      const probe = {
-        workspaceId: active.currentWorkspaceId,
-        cancelled: false,
-        cancelReason: ""
-      };
-      startupScopeProbe = probe;
-      try {
-        // Close any gap between the first active-tab read and completing the
-        // preferences read. A away-and-back switch remains cancelled.
+        const deadlineAt = startupStartedAt + allPreferences.overallDeadlineSeconds * 1000;
         if (probe.cancelled) {
           await saveStartupStatus({
             state: "cancelled",
@@ -988,6 +982,8 @@
           return;
         }
 
+        // Final initialization check closes the storage-read gap. If a switch
+        // happened and then switched back, the probe remains cancelled.
         let verifiedActive;
         try {
           verifiedActive = await awaitWithinDeadline(
@@ -1000,6 +996,7 @@
           });
           return;
         }
+
         if (verifiedActive.currentWorkspaceId === null ||
             !sameWorkspace(verifiedActive.currentWorkspaceId, probe.workspaceId)) {
           probe.cancelled = true;
