@@ -650,7 +650,8 @@
         // Always process one fresh snapshot, even if browser startup or a slow
         // workspace query consumed the monitoring window before the first scan.
         // Later scans still stop at the configured window/deadline.
-        if (Date.now() >= monitoringEndAt && firstSnapshotProcessed) break;
+        const isFirstSnapshot = !firstSnapshotProcessed;
+        if (Date.now() >= monitoringEndAt && !isFirstSnapshot) break;
 
         const candidates = context.allTabs.filter(function (tab) {
           return Number.isInteger(tab.id) &&
@@ -668,7 +669,7 @@
             summary.messages.push("The overall deadline was reached. Remaining tabs were not attempted.");
             break;
           }
-          if (Date.now() >= monitoringEndAt) break;
+          if (Date.now() >= monitoringEndAt && !isFirstSnapshot) break;
 
           const outcome = await inspectAndDiscard(
             candidate.id,
