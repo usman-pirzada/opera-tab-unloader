@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   policy-tests:
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     strategy:
       matrix:
         node-version: [20, 22]
