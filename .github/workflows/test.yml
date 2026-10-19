@@ -35,7 +35,34 @@ jobs:
         run: |
           version="$(node -p "require('./package.json').version")"
           mkdir -p dist
-          zip -r "dist/opera-tab-unloader-v${version}.zip" manifest.json popup.html options.html styles.css options.css src icons README.md
+          python3 - "${version}" <<'PY'
+          import pathlib
+          import sys
+          import zipfile
+
+          version = sys.argv[1]
+          archive = pathlib.Path("dist") / f"opera-tab-unloader-v{version}.zip"
+          inputs = [
+              "manifest.json",
+              "popup.html",
+              "options.html",
+              "styles.css",
+              "options.css",
+              "src",
+              "icons",
+              "README.md",
+          ]
+
+          with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+              for item in inputs:
+                  path = pathlib.Path(item)
+                  if path.is_dir():
+                      for file in sorted(path.rglob("*")):
+                          if file.is_file():
+                              output.write(file, file.as_posix())
+                  else:
+                      output.write(path, path.as_posix())
+          PY
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Upload extension ZIP
