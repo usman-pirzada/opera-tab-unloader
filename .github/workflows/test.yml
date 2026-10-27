@@ -16,9 +16,9 @@ jobs:
         node-version: [20, 22]
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
       - name: Run policy tests and syntax checks
@@ -68,7 +68,7 @@ jobs:
 
       - name: Upload extension ZIP
         if: matrix.node-version == 20 && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: opera-tab-unloader-v${{ steps.package.outputs.version }}
           path: dist/opera-tab-unloader-v${{ steps.package.outputs.version }}.zip
