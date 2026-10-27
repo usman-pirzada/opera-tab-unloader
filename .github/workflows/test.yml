@@ -2,7 +2,9 @@ name: Tests and package
 
 on:
   push:
-  pull_request:
+    branches:
+      - staged
+      - main
   workflow_dispatch:
 
 permissions:
@@ -10,6 +12,9 @@ permissions:
 
 jobs:
   policy-tests:
+    # Manual dispatch is limited to trusted branches. Push events are already
+    # limited to staged/main by the workflow trigger.
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/staged' || github.ref == 'refs/heads/main'
     runs-on: ${{ vars.ACTIONS_RUNNER }}
     strategy:
       matrix:
@@ -29,7 +34,7 @@ jobs:
         run: node -e "JSON.parse(require('node:fs').readFileSync('manifest.json', 'utf8'))"
 
       - name: Package extension
-        if: matrix.node-version == 20 && github.event_name != 'pull_request'
+        if: matrix.node-version == 20
         id: package
         shell: bash
         run: |
@@ -67,7 +72,7 @@ jobs:
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Upload extension ZIP
-        if: matrix.node-version == 20 && github.event_name != 'pull_request'
+        if: matrix.node-version == 20
         uses: actions/upload-artifact@v7
         with:
           name: opera-tab-unloader-v${{ steps.package.outputs.version }}
