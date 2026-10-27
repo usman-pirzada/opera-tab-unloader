@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   policy-tests:
-    runs-on: self-hosted
+    runs-on: ${{ vars.ACTIONS_RUNNER }}
     strategy:
       matrix:
         node-version: [20, 22]
@@ -51,6 +51,7 @@ jobs:
               "src",
               "icons",
               "README.md",
+              "LICENSE",
           ]
 
           with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
