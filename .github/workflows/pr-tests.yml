@@ -1,0 +1,32 @@
+name: Pull request tests
+
+on:
+  pull_request:
+    branches:
+      - staged
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  policy-tests:
+    runs-on: ${{ vars.ACTIONS_RUNNER }}
+    strategy:
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - name: Check out pull request
+        uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Set up Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Run policy tests and syntax checks
+        shell: bash
+        run: timeout --foreground 45s npm test
+
+      - name: Validate manifest JSON
+        run: node -e "JSON.parse(require('node:fs').readFileSync('manifest.json', 'utf8'))"

@@ -21,7 +21,10 @@
     tabSortSelect: $("#tab-sort-select"),
     tabList: $("#tab-list"),
     status: $("#status"),
-    retry: $("#retry-button")
+    retry: $("#retry-button"),
+    refresh: $("#refresh-button"),
+    startupStatus: $("#startup-status"),
+    openSettings: $("#open-settings-button")
   };
 
   let preferences = { ...policy.DEFAULT_PREFERENCES };
@@ -31,6 +34,15 @@
   let selectedWorkspaceId = null;
   let pendingBulk = null;
   let busy = false;
+  let reviewingBulk = false;
+  let manualRefreshing = false;
+  let activeBulkMode = "";
+  let refreshSequence = 0;
+  let refreshTimer = null;
+  let refreshQueued = false;
+  let popupReady = false;
+  let shortcutReviewPending = false;
+  let shortcutReviewInProgress = false;
 
   function setStatus(message) {
     ui.status.textContent = message;
@@ -59,21 +71,25 @@
   }
 
   function updateControls() {
-    ui.workspaceSelect.disabled = busy || !workspaceData;
-    ui.tabSortSelect.disabled = busy || !snapshot;
-    ui.confirmBulk.disabled = busy;
-    ui.retry.disabled = busy;
+    const controlsBusy = busy || reviewingBulk;
+    ui.workspaceSelect.disabled = controlsBusy || !workspaceData;
+    ui.tabSortSelect.disabled = controlsBusy || !snapshot;
+    ui.confirmBulk.disabled = controlsBusy;
+    ui.retry.disabled = controlsBusy;
+    ui.refresh.disabled = controlsBusy || manualRefreshing;
     ui.retry.hidden = Boolean(workspaceData);
     const canUnloadSelectedWorkspace = snapshot &&
       policy.isSameWorkspace(snapshot.workspace.id, snapshot.currentWorkspaceId);
-    ui.unloadAll.disabled = busy || !snapshot || !canUnloadSelectedWorkspace ||
-      snapshot.unknownWorkspaceCount > 0 || snapshot.eligibleTabs.length === 0;
+    ui.unloadAll.disabled = controlsBusy || Boolean(pendingBulk) || !snapshot || !canUnloadSelectedWorkspace ||
+      snapshot.unknownWorkspaceCount > 0 ||
+      (preferences.bulkUnloadMode === "exact-review" && snapshot.eligibleTabs.length === 0);
     ui.tabList.querySelectorAll("button").forEach((button) => {
-      // Refreshing or changing the busy state must never unlock read-only rows.
-      button.disabled = busy || button.dataset.requiresCurrentWorkspace === "true";
+      // A row stays locked when the workspace is read-only, review is active, or
+      // a bulk review is awaiting confirmation.
+      button.disabled = controlsBusy || Boolean(pendingBulk) || button.dataset.requiresCurrentWorkspace === "true";
     });
     document.querySelectorAll(".preference-toggle").forEach((button) => {
-      button.disabled = busy;
+      button.disabled = controlsBusy;
     });
   }
 
@@ -186,6 +202,8 @@
   function clearBulkConfirmation() {
     pendingBulk = null;
     ui.confirmation.hidden = true;
+    ui.confirmBulk.textContent = "Confirm bulk unload";
+    updateControls();
   }
 
   function renderTab(item, workspaceId) {
@@ -279,17 +297,24 @@
       ? "Bulk unload blocked: unknown workspace IDs"
       : !isCurrentWorkspace
         ? "Read-only: switch workspace to unload"
-        : "Unload " + nextSnapshot.eligibleTabs.length + " eligible tab" + (nextSnapshot.eligibleTabs.length === 1 ? "" : "s");
+        : preferences.bulkUnloadMode === "adaptive"
+          ? "Unload all eligible tabs"
+          : "Unload " + nextSnapshot.eligibleTabs.length + " eligible tab" + (nextSnapshot.eligibleTabs.length === 1 ? "" : "s");
     updateControls();
   }
 
-  async function refresh({ allowWhileBusy = false, clearPending = true } = {}) {
-    if (busy && !allowWhileBusy) return;
+  async function refresh({ allowWhileBusy = false, clearPending = true, quiet = false } = {}) {
+    if ((busy || reviewingBulk) && !allowWhileBusy) {
+      refreshQueued = true;
+      return false;
+    }
     if (clearPending) clearBulkConfirmation();
 
-    setStatus("Checking workspace and tab eligibility…");
+    const sequence = ++refreshSequence;
+    if (!quiet) setStatus("Checking workspace and tab eligibility…");
     try {
       const data = await readWorkspaceData();
+      if (sequence !== refreshSequence) return false;
       if (selectedWorkspaceId === null ||
           !data.workspaces.some((item) => sameId(item.id, selectedWorkspaceId))) {
         selectedWorkspaceId = data.currentWorkspaceId;
@@ -297,18 +322,21 @@
       const next = createSnapshot(data, selectedWorkspaceId);
       render(next, data);
 
-      if (next.unknownWorkspaceCount > 0) {
-        setStatus("Safety hold: " + data.unknownWorkspaceCount +
-          " tab(s) have unknown workspace identity. Bulk unloading is blocked.");
-      } else if (!policy.isSameWorkspace(next.workspace.id, next.currentWorkspaceId)) {
-        setStatus("Read-only preview: switch to “" + next.workspace.name + "” in Opera GX to unload its tabs.");
-      } else {
-        setStatus("Checked " + next.workspaceTabs.length + " tab(s) in " +
-          next.workspace.name + ": " + next.eligibleTabs.length + " eligible, " +
-          next.skippedTabs.length + " skipped.");
+      if (!quiet) {
+        if (next.unknownWorkspaceCount > 0) {
+          setStatus("Safety hold: " + data.unknownWorkspaceCount +
+            " tab(s) have unknown workspace identity. Bulk unloading is blocked.");
+        } else if (!policy.isSameWorkspace(next.workspace.id, next.currentWorkspaceId)) {
+          setStatus("Read-only preview: switch to “" + next.workspace.name + "” in Opera GX to unload its tabs.");
+        } else {
+          setStatus("Checked " + next.workspaceTabs.length + " tab(s) in " +
+            next.workspace.name + ": " + next.eligibleTabs.length + " eligible, " +
+            next.skippedTabs.length + " skipped.");
+        }
       }
       return true;
     } catch (error) {
+      if (sequence !== refreshSequence) return false;
       const detail = error instanceof Error && error.message
         ? error.message
         : "An unknown browser API error occurred.";
@@ -317,8 +345,6 @@
       selectedWorkspaceId = null;
       clearBulkConfirmation();
 
-      // Clear every workspace-specific field so an old workspace name/count/button
-      // can never remain visible beside an unavailable-state message.
       ui.workspaceLabel.textContent = "Workspace unavailable";
       ui.workspaceScopeNote.textContent = "Workspace detection failed. Retry or close and reopen this popup.";
       ui.workspaceSelect.replaceChildren();
@@ -335,92 +361,238 @@
       ui.unloadAll.disabled = true;
       ui.tabSortSelect.value = tabSortMode;
       ui.retry.hidden = false;
-      setStatus("Workspace check failed: " + detail + " No tabs were unloaded.");
+      if (!quiet) setStatus("Workspace check failed: " + detail + " No tabs were unloaded.");
       updateControls();
       return false;
     }
   }
 
-  async function inspectTab(tabId, expectedWorkspaceId, requireCompleteMap) {
-    const data = await readWorkspaceData();
-    if (!data.workspaces.some((item) => sameId(item.id, expectedWorkspaceId))) {
-      throw new Error("The selected workspace no longer exists. No tab was unloaded.");
-    }
-    if (!policy.isSameWorkspace(expectedWorkspaceId, data.currentWorkspaceId)) {
-      throw new Error("The selected workspace is not active in Opera GX. Switch to it in the browser before unloading. No tab was unloaded.");
-    }
-    if (requireCompleteMap && data.unknownWorkspaceCount > 0) {
-      throw new Error("Workspace identity became ambiguous during bulk unloading. Remaining tabs were not attempted.");
-    }
-
-    const tab = await chrome.tabs.get(tabId);
-    const evaluation = policy.evaluateTab(tab, expectedWorkspaceId, preferences);
-    return { tab, evaluation };
+  function scheduleRefresh() {
+    if (refreshTimer !== null) clearTimeout(refreshTimer);
+    refreshTimer = setTimeout(function () {
+      refreshTimer = null;
+      if (busy || reviewingBulk) {
+        refreshQueued = true;
+        if (busy && activeBulkMode === "adaptive") {
+          refresh({ allowWhileBusy: true, clearPending: false, quiet: true }).catch(function () {});
+        }
+        return;
+      }
+      const reviewBeforeRefresh = pendingBulk;
+      if (reviewBeforeRefresh && reviewBeforeRefresh.mode !== "adaptive") {
+        clearBulkConfirmation();
+        setStatus("Tab state changed. The exact-list review was cancelled; review the refreshed list again.");
+      }
+      refresh({ clearPending: false, quiet: true }).then(function () {
+        if (!reviewBeforeRefresh || reviewBeforeRefresh.mode !== "adaptive" ||
+            pendingBulk !== reviewBeforeRefresh || !snapshot) return;
+        const stillTargetsCapturedWorkspace =
+          sameId(selectedWorkspaceId, reviewBeforeRefresh.workspaceId) &&
+          sameId(snapshot.workspace.id, reviewBeforeRefresh.workspaceId) &&
+          sameId(snapshot.currentWorkspaceId, reviewBeforeRefresh.workspaceId);
+        if (!stillTargetsCapturedWorkspace) {
+          clearBulkConfirmation();
+          setStatus("The active or selected workspace changed. The adaptive operation was cancelled; choose the intended current workspace and try again.");
+        }
+      }).catch(function () {});
+    }, 250);
   }
 
-  async function discardOne(tabId, expectedWorkspaceId, requireCompleteMap) {
-    const result = await inspectTab(tabId, expectedWorkspaceId, requireCompleteMap === true);
-    const tab = result.tab;
-    if (!result.evaluation.eligible) {
-      return {
-        ok: false,
-        skipped: true,
-        message: "Skipped “" + (tab.title || "Tab") + "”: " + result.evaluation.reasons.join(" ")
-      };
+  function attachLiveUpdates() {
+    const eventNames = ["onUpdated", "onCreated", "onRemoved", "onActivated", "onReplaced"];
+    eventNames.forEach(function (name) {
+      const event = chrome.tabs && chrome.tabs[name];
+      if (event && typeof event.addListener === "function") event.addListener(scheduleRefresh);
+    });
+    if (chrome.storage && chrome.storage.onChanged && typeof chrome.storage.onChanged.addListener === "function") {
+      chrome.storage.onChanged.addListener(function (changes, areaName) {
+        if (areaName !== "local") return;
+        if (changes.startupStatus) renderStartupStatus(changes.startupStatus.newValue);
+        if (changes.bulkReviewRequest && changes.bulkReviewRequest.newValue) {
+          shortcutReviewPending = true;
+          maybeHandleShortcutReviewRequest().catch(function () {});
+        }
+        const preferenceKeys = [...Object.keys(policy.DEFAULT_PREFERENCES), "tabSortMode"];
+        if (Object.keys(changes).some((key) => preferenceKeys.includes(key))) {
+          loadPreferences().then(function () {
+            if (pendingBulk) {
+              clearBulkConfirmation();
+              setStatus("Settings changed while bulk review was open. Review the operation again.");
+            }
+            if (busy || reviewingBulk) {
+              refreshQueued = true;
+            } else {
+              refresh({ clearPending: false, quiet: true }).catch(function () {});
+            }
+          }).catch(function () {});
+        }
+      });
     }
+  }
 
+  function renderStartupStatus(value) {
+    if (!ui.startupStatus) return;
+    if (!value || typeof value.message !== "string" || !value.message) {
+      ui.startupStatus.textContent = preferences.autoUnloadOnStartup
+        ? "Startup auto-unload is enabled for the next browser startup."
+        : "Startup auto-unload is off.";
+      return;
+    }
+    ui.startupStatus.textContent = "Last startup run: " + value.message;
+  }
+
+  async function loadStartupStatus() {
     try {
-      await chrome.tabs.discard(tabId);
-    } catch (error) {
-      const detail = error instanceof Error && error.message
-        ? error.message
-        : "The browser returned an unknown API error.";
-      throw new Error("Opera GX rejected the unload request: " + detail);
+      const stored = await chrome.storage.local.get("startupStatus");
+      renderStartupStatus(stored.startupStatus || null);
+    } catch (_error) {
+      renderStartupStatus(null);
     }
+  }
 
-    let after;
+
+  async function consumeShortcutReviewRequest() {
     try {
-      after = await chrome.tabs.get(tabId);
-    } catch (error) {
-      const detail = error instanceof Error && error.message
-        ? error.message
-        : "The browser returned an unknown API error.";
-      throw new Error("Opera GX returned from the unload request, but the final tab state could not be verified: " + detail);
+      const stored = await chrome.storage.local.get("bulkReviewRequest");
+      const request = stored.bulkReviewRequest;
+      if (!request || !Number.isFinite(request.createdAt)) return false;
+      await chrome.storage.local.remove("bulkReviewRequest");
+      if (Date.now() - request.createdAt > 30000 || Date.now() < request.createdAt) {
+        setStatus("The keyboard bulk-review request expired. Start it again with the shortcut.");
+        return false;
+      }
+      return true;
+    } catch (_error) {
+      return false;
     }
+  }
 
-    if (!after || after.discarded !== true) {
-      return {
-        ok: false,
-        skipped: false,
-        message: (tab.title || "Tab") + ": the unload request returned, but Opera GX still does not confirm that the tab is discarded."
-      };
+  async function maybeHandleShortcutReviewRequest() {
+    if (!popupReady || shortcutReviewInProgress) return;
+    if (busy || reviewingBulk || pendingBulk) {
+      shortcutReviewPending = true;
+      return;
     }
-    return { ok: true, skipped: false, message: (tab.title || "Tab") + " was unloaded." };
+    shortcutReviewInProgress = true;
+    let requested = shortcutReviewPending;
+    shortcutReviewPending = false;
+    try {
+      requested = (await consumeShortcutReviewRequest()) || requested;
+    } finally {
+      shortcutReviewInProgress = false;
+    }
+    if (requested) await beginBulkReview();
+  }
+
+  async function requestBackground(type, payload) {
+    const response = await chrome.runtime.sendMessage({ type, ...(payload || {}) });
+    if (!response || response.ok !== true) {
+      throw new Error(response && response.error ? response.error : "The background unload coordinator did not respond.");
+    }
+    return response.result;
   }
 
   async function handleIndividual(tabId, targetWorkspaceId) {
-    if (busy) return;
+    if (busy || reviewingBulk) return;
+    clearBulkConfirmation();
     busy = true;
     updateControls();
     try {
       setStatus("Rechecking tab immediately before unloading…");
-      const result = await discardOne(tabId, targetWorkspaceId, false);
+      const result = await requestBackground("UNLOAD_ONE", {
+        tabId: tabId,
+        workspaceId: targetWorkspaceId,
+        preferences: preferences
+      });
       const refreshed = await refresh({ allowWhileBusy: true, clearPending: false });
-      if (refreshed) setStatus(result.message);
+      if (refreshed && result && result.message) setStatus(result.message);
     } catch (error) {
       const refreshed = await refresh({ allowWhileBusy: true, clearPending: false });
-      if (refreshed) {
-        setStatus(error instanceof Error ? error.message : "The tab could not be safely checked.");
-      }
+      if (refreshed) setStatus(error instanceof Error ? error.message : "The tab could not be safely checked.");
     } finally {
       busy = false;
       if (snapshot && workspaceData) render(snapshot, workspaceData);
       else updateControls();
+      if (refreshQueued) {
+        refreshQueued = false;
+        scheduleRefresh();
+      }
     }
   }
 
   async function beginBulkReview() {
-    if (busy) return;
+    if (preferences.bulkUnloadMode === "adaptive") {
+      await beginAdaptiveBulkOperation();
+      return;
+    }
+    await beginExactReview();
+  }
+
+  async function beginAdaptiveBulkOperation() {
+    if (busy || reviewingBulk || pendingBulk) {
+      if (pendingBulk) setStatus("A bulk operation is already awaiting confirmation. Confirm or cancel it first.");
+      return;
+    }
+    reviewingBulk = true;
+    updateControls();
+    let workspaceToStart = null;
+    try {
+      const data = await readWorkspaceData();
+      if (selectedWorkspaceId === null ||
+          !data.workspaces.some((item) => sameId(item.id, selectedWorkspaceId))) {
+        selectedWorkspaceId = data.currentWorkspaceId;
+      }
+      const latest = createSnapshot(data, selectedWorkspaceId);
+      render(latest, data);
+
+      if (!policy.isSameWorkspace(latest.workspace.id, latest.currentWorkspaceId)) {
+        clearBulkConfirmation();
+        setStatus("Read-only preview: switch to “" + latest.workspace.name + "” in Opera GX before unloading tabs.");
+        return;
+      }
+      if (latest.unknownWorkspaceCount > 0) {
+        clearBulkConfirmation();
+        setStatus("Bulk unload blocked because " + latest.unknownWorkspaceCount +
+          " tab(s) have no verifiable workspace ID.");
+        return;
+      }
+
+      workspaceToStart = latest.workspace.id;
+      if (preferences.confirmBulkUnload) {
+        pendingBulk = { mode: "adaptive", workspaceId: workspaceToStart };
+        ui.confirmationText.textContent =
+          "Start adaptive unloading in “" + latest.workspace.name + "”? The extension will unload tabs eligible now and keep rescanning for tabs that become eligible during the next " +
+          preferences.adaptiveBulkScanSeconds + " seconds, up to the " + preferences.overallDeadlineSeconds +
+          "-second overall deadline. Counts may change during the run, so this does not promise a fixed tab count. Switching workspaces stops the run.";
+        ui.confirmBulk.textContent = "Start adaptive unload";
+        ui.confirmation.hidden = false;
+        setStatus("Confirm to start a bounded adaptive scan. It does not require the eligible count to remain fixed.");
+        workspaceToStart = null;
+      } else {
+        setStatus("Starting adaptive scan. Eligible tabs will be unloaded as they appear during the configured window.");
+      }
+    } catch (error) {
+      workspaceToStart = null;
+      setStatus(error instanceof Error ? error.message : "Could not verify workspace membership; no tabs were unloaded.");
+    } finally {
+      reviewingBulk = false;
+      updateControls();
+      if (refreshQueued) {
+        refreshQueued = false;
+        scheduleRefresh();
+      }
+    }
+    if (workspaceToStart !== null) await executeAdaptiveBulk(workspaceToStart);
+  }
+
+  async function beginExactReview() {
+    if (busy || reviewingBulk || pendingBulk) {
+      if (pendingBulk) setStatus("A bulk review is already awaiting confirmation. Confirm or cancel it first.");
+      return;
+    }
+    reviewingBulk = true;
+    updateControls();
+    let shouldAutoConfirm = false;
     try {
       const data = await readWorkspaceData();
       if (selectedWorkspaceId === null ||
@@ -442,20 +614,64 @@
         return;
       }
       if (latest.eligibleTabs.length === 0) {
-        setStatus("No tabs passed the current preferences and safety checks.");
+        setStatus("No tabs passed the current preferences and safety checks. Refresh after tabs finish loading.");
         return;
       }
 
       pendingBulk = {
+        mode: "exact-review",
         workspaceId: latest.workspace.id,
         tabIds: latest.eligibleTabs.map((tab) => tab.id)
       };
-      ui.confirmationText.textContent = "Unload " + pendingBulk.tabIds.length + " eligible tab(s) in “" +
-        latest.workspace.name + "”? Every tab will be checked again immediately before unloading.";
-      ui.confirmation.hidden = false;
-      setStatus("Confirm the bulk operation below to proceed. Individual tabs unload without this confirmation.");
+      if (preferences.confirmBulkUnload) {
+        ui.confirmationText.textContent = "Review mode has captured " + pendingBulk.tabIds.length +
+          " eligible tab(s) in “" + latest.workspace.name + "”. If Opera changes the eligible list before you confirm, this operation safely cancels and asks you to review again. This mode is most useful when the tab set is stable.";
+        ui.confirmBulk.textContent = "Confirm exact list and unload";
+        ui.confirmation.hidden = false;
+        setStatus("Review the exact candidate list, then confirm. A changed list cancels the operation rather than adding new tabs.");
+      } else {
+        ui.confirmation.hidden = true;
+        shouldAutoConfirm = true;
+      }
     } catch (error) {
       setStatus(error instanceof Error ? error.message : "Could not verify workspace membership; no tabs were unloaded.");
+    } finally {
+      reviewingBulk = false;
+      updateControls();
+      if (refreshQueued) {
+        refreshQueued = false;
+        scheduleRefresh();
+      }
+    }
+    if (shouldAutoConfirm && pendingBulk) await confirmBulk();
+  }
+
+  async function executeAdaptiveBulk(workspaceId) {
+    if (busy || !sameId(selectedWorkspaceId, workspaceId)) return;
+    busy = true;
+    activeBulkMode = "adaptive";
+    clearBulkConfirmation();
+    updateControls();
+    setStatus("Adaptive bulk unload is running. The eligible count will continue updating during the scan.");
+    try {
+      const result = await requestBackground("UNLOAD_ADAPTIVE", {
+        workspaceId: workspaceId,
+        preferences: preferences
+      });
+      const refreshed = await refresh({ allowWhileBusy: true, clearPending: false });
+      if (refreshed && result && result.message) setStatus(result.message);
+    } catch (error) {
+      const refreshed = await refresh({ allowWhileBusy: true, clearPending: false });
+      if (refreshed) setStatus(error instanceof Error ? error.message : "Adaptive bulk unload stopped safely.");
+    } finally {
+      busy = false;
+      activeBulkMode = "";
+      if (snapshot && workspaceData) render(snapshot, workspaceData);
+      else updateControls();
+      if (refreshQueued) {
+        refreshQueued = false;
+        scheduleRefresh();
+      }
     }
   }
 
@@ -469,91 +685,38 @@
     }
 
     busy = true;
-    ui.confirmation.hidden = true;
+    activeBulkMode = operation.mode || "exact-review";
+    clearBulkConfirmation();
     updateControls();
-    let succeeded = 0;
-    let skipped = 0;
-    let failed = 0;
-    let aborted = false;
-    const messages = [];
-
+    setStatus(operation.mode === "adaptive"
+      ? "Adaptive bulk unload is starting. It will rescan as tab states change."
+      : "The background coordinator is rechecking the exact reviewed list…");
     try {
-      const data = await readWorkspaceData();
-      if (!policy.isSameWorkspace(operation.workspaceId, data.currentWorkspaceId)) {
-        throw new Error("The active Opera GX workspace changed before bulk unloading. The operation was cancelled; switch to the target workspace and review again.");
-      }
-      if (data.unknownWorkspaceCount > 0) {
-        throw new Error("Bulk unload stopped because one or more tabs have unknown workspace identity.");
-      }
-      const before = createSnapshot(data, operation.workspaceId);
-      const currentIds = before.eligibleTabs.map((tab) => tab.id).sort((a, b) => a - b);
-      const expectedIds = operation.tabIds.slice().sort((a, b) => a - b);
-      const sameCandidates = currentIds.length === expectedIds.length &&
-        currentIds.every((id, index) => id === expectedIds[index]);
-      if (!sameCandidates) {
-        pendingBulk = null;
-        render(before, data);
-        setStatus("The eligible tab list changed after review. Nothing was unloaded; review the refreshed list again.");
-        return;
-      }
-
-      for (let index = 0; index < operation.tabIds.length; index++) {
-        setStatus("Rechecking and unloading tab " + (index + 1) + " of " + operation.tabIds.length + "…");
-        try {
-          const result = await discardOne(operation.tabIds[index], operation.workspaceId, true);
-          if (result.ok) succeeded++;
-          else if (result.skipped) skipped++;
-          else failed++;
-          messages.push(result.message);
-        } catch (error) {
-          failed++;
-          messages.push(error instanceof Error ? error.message : "A tab unload failed.");
-          // A thrown error means the target or browser API state is uncertain.
-          // Stop rather than attempting more native discards in this batch.
-          aborted = true;
-          break;
-        }
-      }
-
-      pendingBulk = null;
+      const result = operation.mode === "adaptive"
+        ? await requestBackground("UNLOAD_ADAPTIVE", {
+            workspaceId: operation.workspaceId,
+            preferences: preferences
+          })
+        : await requestBackground("UNLOAD_BATCH", {
+            workspaceId: operation.workspaceId,
+            tabIds: operation.tabIds,
+            preferences: preferences
+          });
       const refreshed = await refresh({ allowWhileBusy: true, clearPending: false });
-      if (refreshed) {
-        setStatus("Bulk result: " + succeeded + " unloaded, " + skipped + " skipped on recheck, " +
-          failed + " failed." + (aborted ? " Remaining tabs were not attempted." : "") +
-          (messages.length > 0 ? " " + messages.slice(0, 2).join(" ") : ""));
-      }
+      if (refreshed && result && result.message) setStatus(result.message);
     } catch (error) {
-      pendingBulk = null;
       const refreshed = await refresh({ allowWhileBusy: true, clearPending: false });
-      if (refreshed) {
-        setStatus(error instanceof Error ? error.message : "Bulk operation aborted safely.");
-      }
+      if (refreshed) setStatus(error instanceof Error ? error.message : "Bulk operation failed safely.");
     } finally {
       busy = false;
+      activeBulkMode = "";
       if (snapshot && workspaceData) render(snapshot, workspaceData);
       else updateControls();
+      if (refreshQueued) {
+        refreshQueued = false;
+        scheduleRefresh();
+      }
     }
-  }
-
-  function enableSafetyPreferenceButtons() {
-    document.querySelectorAll(".preference-toggle[data-pref]").forEach((button) => {
-      const key = button.dataset.pref;
-      renderPreferenceToggle(button, preferences[key] === true);
-      button.addEventListener("click", async () => {
-        if (busy) return;
-        const enabled = !(preferences[key] === true);
-        preferences = { ...preferences, [key]: enabled };
-        renderPreferenceToggle(button, enabled);
-        clearBulkConfirmation();
-        updateControls();
-        try {
-          await chrome.storage.local.set({ [key]: enabled });
-        } catch (_error) {
-          setStatus("Could not save that preference. The change remains active for this popup session.");
-        }
-        await refresh({ clearPending: false });
-      });
-    });
   }
 
   ui.workspaceSelect.addEventListener("change", async () => {
@@ -579,7 +742,27 @@
     }
   });
 
+  ui.openSettings.addEventListener("click", () => {
+    chrome.runtime.openOptionsPage().catch((error) => {
+      setStatus(error instanceof Error ? error.message : "Could not open Settings. Use opera://extensions and choose Extension options.");
+    });
+  });
   ui.retry.addEventListener("click", () => refresh());
+  ui.refresh.addEventListener("click", async () => {
+    if (manualRefreshing || busy || reviewingBulk) return;
+    manualRefreshing = true;
+    document.body.classList.add("is-refreshing");
+    ui.refresh.setAttribute("aria-busy", "true");
+    updateControls();
+    try {
+      await refresh();
+    } finally {
+      manualRefreshing = false;
+      document.body.classList.remove("is-refreshing");
+      ui.refresh.removeAttribute("aria-busy");
+      updateControls();
+    }
+  });
   ui.unloadAll.addEventListener("click", beginBulkReview);
   ui.cancelBulk.addEventListener("click", () => {
     clearBulkConfirmation();
@@ -591,10 +774,7 @@
     const keys = [...Object.keys(policy.DEFAULT_PREFERENCES), "tabSortMode"];
     try {
       const stored = await chrome.storage.local.get(keys);
-      preferences = { ...policy.DEFAULT_PREFERENCES };
-      for (const key of Object.keys(policy.DEFAULT_PREFERENCES)) {
-        if (typeof stored[key] === "boolean") preferences[key] = stored[key];
-      }
+      preferences = policy.normalizePreferences(stored);
       if (["eligible-first", "eligible-last", "tab-order"].includes(stored.tabSortMode)) {
         tabSortMode = stored.tabSortMode;
       }
@@ -603,19 +783,23 @@
       tabSortMode = "eligible-first";
       setStatus("Saved preferences could not be loaded. Conservative defaults are active for this session.");
     }
-    enableSafetyPreferenceButtons();
     ui.tabSortSelect.value = tabSortMode;
   }
 
   (async function init() {
-    if (!chrome.tabs || typeof chrome.tabs.discard !== "function") {
-      setStatus("This browser build does not expose tabs.discard. Nothing was unloaded.");
+    if (!chrome.tabs || typeof chrome.tabs.query !== "function" || !chrome.runtime || typeof chrome.runtime.sendMessage !== "function") {
+      setStatus("This browser build does not expose the extension APIs required for safe unloading.");
       ui.unloadAll.disabled = true;
       return;
     }
+    chrome.runtime.sendMessage({ type: "POPUP_OPENED" }).catch(function () {});
     await loadPreferences();
+    attachLiveUpdates();
+    await loadStartupStatus();
     // The selector always starts with the current workspace whenever the popup opens.
     selectedWorkspaceId = null;
     await refresh();
+    popupReady = true;
+    await maybeHandleShortcutReviewRequest();
   })();
 })();

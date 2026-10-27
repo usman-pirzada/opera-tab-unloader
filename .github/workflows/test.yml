@@ -2,7 +2,9 @@ name: Tests and package
 
 on:
   push:
-  pull_request:
+    branches:
+      - staged
+      - main
   workflow_dispatch:
 
 permissions:
@@ -10,36 +12,68 @@ permissions:
 
 jobs:
   policy-tests:
-    runs-on: ubuntu-latest
+    # Manual dispatch is limited to trusted branches. Push events are already
+    # limited to staged/main by the workflow trigger.
+    if: github.event_name != 'workflow_dispatch' || github.ref == 'refs/heads/staged' || github.ref == 'refs/heads/main'
+    runs-on: ${{ vars.ACTIONS_RUNNER }}
     strategy:
       matrix:
         node-version: [20, 22]
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node-version }}
       - name: Run policy tests and syntax checks
-        run: npm test
+        shell: bash
+        run: timeout --foreground 45s npm test
 
       - name: Validate manifest JSON
         run: node -e "JSON.parse(require('node:fs').readFileSync('manifest.json', 'utf8'))"
 
       - name: Package extension
-        if: matrix.node-version == 20 && github.event_name != 'pull_request'
+        if: matrix.node-version == 20
         id: package
         shell: bash
         run: |
           version="$(node -p "require('./package.json').version")"
           mkdir -p dist
-          zip -r "dist/opera-tab-unloader-v${version}.zip" manifest.json popup.html styles.css src README.md
+          python3 - "${version}" <<'PY'
+          import pathlib
+          import sys
+          import zipfile
+
+          version = sys.argv[1]
+          archive = pathlib.Path("dist") / f"opera-tab-unloader-v{version}.zip"
+          inputs = [
+              "manifest.json",
+              "popup.html",
+              "options.html",
+              "styles.css",
+              "options.css",
+              "src",
+              "icons",
+              "README.md",
+              "LICENSE",
+          ]
+
+          with zipfile.ZipFile(archive, "w", compression=zipfile.ZIP_DEFLATED) as output:
+              for item in inputs:
+                  path = pathlib.Path(item)
+                  if path.is_dir():
+                      for file in sorted(path.rglob("*")):
+                          if file.is_file():
+                              output.write(file, file.as_posix())
+                  else:
+                      output.write(path, path.as_posix())
+          PY
           echo "version=${version}" >> "$GITHUB_OUTPUT"
 
       - name: Upload extension ZIP
-        if: matrix.node-version == 20 && github.event_name != 'pull_request'
-        uses: actions/upload-artifact@v4
+        if: matrix.node-version == 20
+        uses: actions/upload-artifact@v7
         with:
           name: opera-tab-unloader-v${{ steps.package.outputs.version }}
           path: dist/opera-tab-unloader-v${{ steps.package.outputs.version }}.zip

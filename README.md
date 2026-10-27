@@ -1,81 +1,145 @@
 # Opera GX Workspace Tab Unloader
 
-A small, local-only Manifest V3 extension for inspecting tabs across Opera GX workspaces and discarding eligible tabs individually or in bulk in the current workspace. A discarded tab stays in the tab strip and reloads when activated.
+Unload eligible tabs in Opera GX to help free up memory while keeping those tabs in your tab bar. Inspect tabs across workspaces, unload one tab at a time or in bulk, and adjust protections to fit your workflow.
 
 ## Features
 
-- **Clear workspace error state:** If workspace detection fails, the popup clears stale tab counts/actions, shows the underlying error, and exposes a retry control. It never leaves old unload controls visible beside an error.
+- **Workspace-aware tab list:** View eligible and skipped tabs in detected Opera GX workspaces. Other workspaces are previews until you switch to them in Opera GX.
+- **Unload one tab:** Unload an eligible tab without a separate confirmation dialog. The extension checks it again immediately before the action.
+- **Bulk unloading:** Choose adaptive scanning to look for newly eligible tabs during a limited scan window, or exact-review mode to work from a reviewed list. Confirmation behavior can be configured in Settings.
+- **Optional startup auto-unload:** When enabled, the extension monitors the startup workspace and unloads eligible tabs during a configurable window. This feature is off by default.
+- **Separate protection profiles:** Configure protections for manual unloading and startup auto-unload independently, including pinned, audible, non-auto-discardable, and loading tabs.
+- **Settings page:** Preferences save automatically. Timing values are validated, settings that reduce protections ask for confirmation, and defaults can be restored.
+- **Operation status:** A toolbar indicator shows bulk/startup activity and recent outcomes. The popup displays current counts and the latest startup result.
+- **Keyboard shortcut:** `Ctrl+Shift+U` is the suggested shortcut for opening the popup and starting the selected bulk mode. You can change it in Opera GX's extension-shortcuts settings.
+- **Privacy-conscious design:** No content scripts, website host permissions, remote code, external services, telemetry, analytics, or runtime dependencies.
 
-- **Workspace selector with read-only previews:** The popup defaults to the current workspace. Other detected workspaces remain inspectable, with eligible/skipped tabs and counts visible, but all unload actions stay disabled until that workspace is made current in Opera GX.
-- **Workspace-specific targeting:** Tabs are selected by Opera's `workspaceId`, not by window ID.
-- **Immediate individual unloading:** Clicking **Unload tab** runs the safety preflight again and discards that tab without a separate confirmation.
-- **Confirmed bulk unloading:** Review and confirm the batch. Every tab is checked again immediately before the discard attempt.
-- **Configurable preferences:** Skip pinned tabs, audible tabs, and tabs marked `autoDiscardable: false`. Preference buttons show green ON and red OFF states.
-- **Persistent sorting:** Choose **Eligible first**, **Eligible last**, or **Tab order**. The choice is saved locally and restored the next time the popup opens.
-- **Conservative scope checks:** Tabs without a verifiable workspace identity are not guessed into a workspace. If any tab has unknown workspace identity, bulk unloading is blocked. Fresh preflight checks prevent unloading when the active workspace has changed.
-- **Readable popup:** One overall scroll area, separated sections, larger typography, status above the tab list, and collapsible Preferences.
-- No content scripts, website host permissions, remote code, external services, telemetry, analytics, or runtime dependencies.
+## Before unloading a tab
 
-> **State limitation:** Extension APIs cannot reliably detect every kind of unsaved state inside arbitrary websites. The preflight checks browser-visible metadata and conservative exclusions, but cannot guarantee that application state held only in a page's memory will be restored after discard. Save important work before discarding tabs.
+Unloading uses Opera's built-in tab-discarding feature to free memory while **keeping the tab in your tab bar**. The tab is not deleted; when you select it again, Opera reloads the page.
 
-## Safety policy
+As with any page reload, a website might not restore changes that you haven't saved on that website yet (for example, text typed into a form but not submitted). Save important changes before unloading a tab.
 
-The extension always skips:
-- The active tab, loading tabs, already-discarded tabs, and tabs whose critical metadata is unknown.
-- Private-window tabs.
-- Non-HTTP(S) pages such as browser-internal pages.
-- URLs that contain embedded credentials.
-- Tabs that do not belong to the selected workspace.
+## Install on Opera GX
 
-By default it also skips pinned tabs, audible tabs, and tabs marked non-auto-discardable; these three protections can be switched off in Preferences.
+This project targets Opera GX, including its Linux Flatpak distribution. Workspace features depend on the version of Opera GX installed.
 
-Individual unloads in the current workspace do not show a confirmation dialog, as requested, but revalidate workspace identity and tab eligibility immediately before calling `chrome.tabs.discard()`. Bulk unloads require confirmation, verify the target remains the active workspace, compare the eligible set against the reviewed set, and stop if an error makes the remaining operation uncertain. The extension verifies the browser-reported discard state and does not report success when that state cannot be confirmed.
+1. Download and extract the source from the [repository](https://github.com/usman-pirzada/opera-tab-unloader), or clone it:
 
-Tabs in other workspaces are read-only previews. Changing the selector does not switch Opera GX's active workspace; switch in the browser itself before unloading those tabs. The stable build does not maintain diagnostic event logs or expose a diagnostics panel.
+   ```bash
+   git clone https://github.com/usman-pirzada/opera-tab-unloader.git
+   ```
 
-## Compatibility notes
-
-Opera documents `workspaceId` and `workspaceName` on its Tabs API from Opera 77 onward. This project targets Opera GX, including its Flatpak distribution. Workspace IDs must be present and consistent in the exact installed GX build; when the active workspace cannot be identified, the extension refuses to guess based on window identity.
-
-The extension runs inside the browser and does not require host OS integration. The Flatpak installation does not require copying files into Flatpak's internal directories.
-
-## Install in Opera GX Flatpak on Linux
-
-1. Download or clone this repository into a normal folder in your home directory.
 2. Open `opera://extensions` in Opera GX.
-3. Enable **Developer mode**.
-4. Choose **Load unpacked** and select the repository folder containing `manifest.json`.
-5. Pin the extension to the toolbar and open it.
+3. Turn on **Developer mode**.
+4. Select **Load unpacked** and choose the project folder containing `manifest.json`.
+5. Pin **Workspace Tab Unloader** to the toolbar for easy access.
 
-## Tests
+To update an unpacked installation, update the project files and select **Reload** on the extension's card in `opera://extensions`. The `staged` branch may contain features that have not yet been included in a published release.
 
-Node.js 18 or later is required only for tests, not for the extension itself.
+## How to use it
+
+### Inspect and unload tabs
+
+1. Open the extension from the toolbar. The popup defaults to the current workspace.
+2. Use the workspace selector to inspect a workspace.
+3. Review the eligible/skipped labels and counts. The sorting preference can show eligible tabs first, eligible tabs last, or browser tab order.
+4. Select **Unload tab** beside an eligible tab, or start the configured bulk-unload action.
+5. Review and confirm a bulk action when confirmation is enabled in Settings.
+
+A discarded tab remains visible in the tab bar and normally reloads when you select it again.
+
+**Workspace behavior:** Tabs in other workspaces are read-only previews. The extension does not switch workspaces for you. Switch to the target workspace in Opera GX, then reopen the popup before unloading tabs there. If workspace identity cannot be verified, the extension refuses to guess.
+
+### Configure Settings
+
+Open the extension's **Settings** page from the extension details page or menu. Changes save automatically. Settings include:
+
+- Separate manual-unload and startup-auto-unload protection profiles.
+- Protections for pinned, audible, non-auto-discardable, and loading tabs.
+- Bulk mode and confirmation preferences.
+- Optional startup auto-unload, disabled by default.
+- Startup monitoring, loading grace, scan intervals, adaptive scan window, per-tab time budget, and overall time limit.
+- Reset to recommended defaults.
+
+Read the explanation next to each setting before reducing a protection. Some changes require confirmation. If a tab's pending URL cannot be verified, the extension skips it by default rather than guessing.
+
+### Toolbar status indicator
+
+The toolbar indicator communicates bulk or startup activity and its latest outcome. Individual tab unloads do not change it. If an operation reports an error or cancellation, review the details in the popup rather than assuming all tabs were unloaded.
+
+## Safety and limitations
+
+The extension uses conservative checks before attempting to unload tabs. It skips or blocks operations involving the active tab, already-discarded tabs, private-window tabs, browser-internal pages, URLs containing embedded credentials, tabs with unknown critical metadata, and tabs without a verifiable workspace identity. It also avoids unloading tabs whose loading/status state cannot be evaluated safely.
+
+Pinned, audible, non-auto-discardable, and loading-tab protections can be configured separately for manual and startup operations. Disabling a protection can make more tabs eligible, so read the warning shown in Settings.
+
+Bulk operations recheck eligibility and workspace identity before each attempt. Adaptive mode takes fresh snapshots during its scan window; exact-review mode uses a fixed candidate list and may cancel if that list changes. Operations have time limits. If the extension cannot confirm whether a discard succeeded, it stops further attempts rather than reporting an unverified success.
+
+Startup auto-unload only targets the workspace captured at startup. It does not switch workspaces and stops safely if workspace identity is ambiguous or the active workspace changes. If Opera ends the extension's background process, a startup run may end early.
+
+## Compatibility
+
+Opera exposes `workspaceId` and `workspaceName` in its Tabs API from Opera 77 onward. Your installed Opera GX build must return consistent workspace IDs for workspace-aware behavior to work. If the extension cannot verify workspace identity, it avoids unloading tabs based on window identity alone.
+
+The extension runs inside the browser. On Linux Flatpak, there is no need to copy files into Flatpak's internal directories.
+
+## Privacy and permissions
+
+The extension requests only these permissions:
+
+- `tabs` — read tab metadata, inspect workspace IDs, enumerate tabs, observe tab lifecycle events, and request tab discarding.
+- `storage` — save preferences, sorting choices, and a summary of the latest startup operation.
+
+There are no website host permissions or content scripts. Preferences are stored locally. Tab-supplied text is displayed as text, not interpreted as HTML. The extension does not include telemetry, analytics, or remote services.
+
+## Troubleshooting
+
+- **Workspace list or counts look wrong:** Confirm your Opera GX version supports workspace metadata, then close and reopen the popup.
+- **Unload controls are disabled:** The selected workspace may not be the current workspace, or its identity may be unavailable. Switch workspaces in Opera GX itself.
+- **A tab is skipped:** Check the reason shown in the popup and review the related protections in Settings. Some pages and tab states are intentionally ineligible.
+- **An operation stops early or reports an uncertain result:** The extension could not safely confirm the browser's result. Check the tab and retry after the browser settles.
+- **The keyboard shortcut does not work:** Open Opera GX's extension-shortcuts settings and check the shortcut assigned to the extension.
+- **A page does not restore unsaved input:** Save important changes before unloading. This is a limitation of page reloads in general, not a sign that the tab itself was deleted.
+
+## For contributors
+
+Bug reports and contributions are welcome. For a useful report, include your Opera GX version, installation type, exact steps to reproduce, expected behavior, and observed behavior. Do not include passwords, private browsing data, or sensitive page contents.
+
+### Development requirements
+
+- Node.js 18 or later for automated tests.
+- Opera GX for live integration testing, especially workspace identity, native tab discarding, startup restoration, and keyboard shortcuts.
+
+### Run automated tests
 
 ```bash
 npm test
 ```
 
-The suite checks JavaScript syntax and the pure tab eligibility/sorting policy. Automated tests do not replace live integration testing in Opera GX.
+The test suite covers eligibility/sorting rules and mocked asynchronous background operations. Passing automated tests does not replace live testing in Opera GX.
 
-## Manual integration test checklist
+### Useful integration checks
 
-- Verify workspace IDs are returned for tabs in all open browser windows.
-- Create two GX workspaces and ensure the selector can inspect either without switching the browser's active workspace.
-- Confirm non-current workspace counts and eligible/skipped tabs remain visible, while individual and bulk unload controls stay disabled even after preference changes or refreshes.
-- Switch the browser to that workspace and reopen the popup; confirm unload controls become available only for the now-current workspace.
-- Confirm opening the popup defaults the workspace selector to the current workspace.
-- Confirm eligible-first, eligible-last and tab-order sorting persist when the popup is reopened.
-- Test individual unload: a fresh preflight occurs and no confirmation is shown.
-- Test bulk unload: confirmation appears, stale candidates or a changed active workspace abort safely, and each tab is rechecked immediately before discard.
-- Confirm unload API rejection or failure to retrieve the final tab state produces an error/uncertain result rather than a false success.
-- Test active tabs, pinned tabs, audible tabs, loading tabs, private windows, internal pages and already-discarded tabs.
-- Test tabs being closed or moved between review and confirmation.
-- Confirm discarded tabs remain visible and reload when activated.
-- Test a website with unsaved form state and record actual behavior; generic extension APIs cannot guarantee protection for every web app.
+- Workspace previews and read-only behavior for workspaces that are not current.
+- Individual unloads and both bulk modes while tabs open, close, move, or change eligibility.
+- Loading-tab, pinned-tab, audible-tab, and non-auto-discardable protections in each profile.
+- Startup auto-unload being off by default, tracking the startup workspace, and stopping on workspace changes.
+- Timeout and uncertain-discard handling; unconfirmed outcomes must never be reported as success.
+- Settings validation, reset-to-defaults, protection-change confirmations, and shortcut configuration.
+- Website form state and other unsaved changes, recording actual behavior without assuming every web app handles reloads identically.
 
-## Permissions
+## Project structure
 
-- `tabs`: read tab metadata, inspect workspace IDs, enumerate tabs, and request native discard.
-- `storage`: save local preferences and tab-sort order.
+- `manifest.json` — extension metadata, permissions, Settings page, and keyboard shortcut.
+- `popup.html`, `src/popup.js`, `styles.css` — toolbar popup and tab list.
+- `options.html`, `src/options.js`, `options.css` — Settings interface.
+- `src/background.js` — background operations, startup monitoring, and tab lifecycle handling.
+- `src/tab-policy.js` — shared eligibility and sorting rules.
+- `tests/` — automated tests.
+- `.github/workflows/` — automated test and packaging workflow.
 
-No website host permissions or content scripts are declared. Tab-supplied text is inserted using `textContent`, not interpreted as HTML.
+## License
+
+This project is licensed under the MIT License.
+See [LICENSE](LICENSE) for the full license text.
