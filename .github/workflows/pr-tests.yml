@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   policy-tests:
-    runs-on: ${{ vars.ACTIONS_GITHUB_HOSTED_RUNNER || 'ubuntu-latest' }}
+    runs-on: ${{ vars.ACTIONS_RUNNER || 'ubuntu-latest' }}
     strategy:
       matrix:
         node-version: [20, 22]
