@@ -6,15 +6,11 @@ on:
       - staged
       - main
 
-# PR code is untrusted. Grant only read access and do not expose secrets.
 permissions:
   contents: read
 
 jobs:
   policy-tests:
-    # Standard GitHub-hosted runners are free for public repositories.
-    # The variable lets the runner label be changed centrally; fallback is
-    # the standard hosted Ubuntu runner if the variable is unset.
     runs-on: ${{ vars.ACTIONS_GITHUB_HOSTED_RUNNER || 'ubuntu-latest' }}
     strategy:
       matrix:
