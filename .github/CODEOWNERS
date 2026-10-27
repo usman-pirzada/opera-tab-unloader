@@ -1,0 +1,6 @@
+# Workflow files can execute code and select runner environments.
+# Require the repository owner to review changes to workflow definitions.
+/.github/workflows/ @usman-pirzada
+
+# Protect the ownership rules themselves.
+/.github/CODEOWNERS @usman-pirzada
